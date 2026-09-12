@@ -10,14 +10,29 @@ final class PortGameScene: SKScene {
     private let actorLayer = SKNode()
     private let hudNode = SKSpriteNode()
     private let dialogueNode = SKSpriteNode()
+    private let cinematicNode = SKSpriteNode()
 
     private var runtime: NativeBridgeRuntime?
+    private var rom: ROMImage?
+    private var sceneDescriptors: [Int] = []
+    private var sceneCache: [Int: ALFPSceneData.IndexedScene] = [:]
+    private var currentScene: ALFPSceneData.IndexedScene?
+    private var currentSceneImage: CGImage?
+    private var currentSceneDescriptor: Int?
+
+    private var cameraTopLeftX: Double?
+    private var cameraTopLeftY: Double?
+    private var lastScroll: NativeBridgeRuntime.BackgroundOffset?
+    private var usedFirstSceneFallback = false
+
     private var frameCounter = 0
+    private var fieldConfidence = 0
+    private var cinematicConfidence = 0
+    private var fieldPresentationActive = false
 
     private let portraitHeight = 520
     private let originalViewportHeight = 160
     private let hudHeight = 40
-    private let dialogueHeight = 72
 
     private var verticalExtension: Int {
         (portraitHeight - originalViewportHeight) / 2
@@ -41,6 +56,7 @@ final class PortGameScene: SKScene {
         view.ignoresSiblingOrder = true
         view.isMultipleTouchEnabled = true
         view.contentMode = .scaleAspectFill
+        view.backgroundColor = .black
 
         backgroundNode.anchorPoint = CGPoint(x: 0, y: 0)
         backgroundNode.position = .zero
@@ -48,27 +64,37 @@ final class PortGameScene: SKScene {
         backgroundNode.zPosition = -1000
         addChild(backgroundNode)
 
+        cinematicNode.anchorPoint = CGPoint(x: 0, y: 0)
+        cinematicNode.position = .zero
+        cinematicNode.size = CGSize(width: 240, height: portraitHeight)
+        cinematicNode.zPosition = -900
+        addChild(cinematicNode)
+
         actorLayer.zPosition = 100
         addChild(actorLayer)
 
         hudNode.anchorPoint = CGPoint(x: 0, y: 0)
-        hudNode.position = CGPoint(x: 0, y: portraitHeight - hudHeight)
+        hudNode.position = CGPoint(x: 0, y: portraitHeight - hudHeight - 8)
         hudNode.size = CGSize(width: 240, height: hudHeight)
         hudNode.zPosition = 5000
         hudNode.isHidden = true
         addChild(hudNode)
 
-        dialogueNode.anchorPoint = CGPoint(x: 0, y: 0)
-        dialogueNode.position = CGPoint(x: 0, y: 82)
-        dialogueNode.size = CGSize(width: 240, height: dialogueHeight)
+        dialogueNode.anchorPoint = CGPoint(x: 0.5, y: 0)
+        dialogueNode.position = CGPoint(x: 120, y: 64)
         dialogueNode.zPosition = 5100
         dialogueNode.isHidden = true
         addChild(dialogueNode)
 
         do {
+            let image = try ROMImage(data: Data(contentsOf: romURL, options: .mappedIfSafe))
+            rom = image
+            sceneDescriptors = ALFPSceneData.scanSceneDescriptors(in: image)
+
             let bridge = try NativeBridgeRuntime()
             try bridge.start(romURL: romURL, saveURL: saveURL)
             runtime = bridge
+            showCinematic(bridge)
         } catch {
             installFailureWorld(message: error.localizedDescription)
         }
@@ -79,113 +105,182 @@ final class PortGameScene: SKScene {
         runtime.runFrame(input: input)
         frameCounter &+= 1
 
-        // Cartridge timing and input remain 60 Hz. Rebuild the heavier native
-        // portrait presentation at 30 Hz so gameplay timing is never slowed down.
-        if frameCounter == 1 || frameCounter % 2 == 0 {
-            refreshPresentation(runtime)
-        }
+        // Keep game logic/input at 60 Hz. Rendering the authored 1024x1024 scene
+        // at 30 Hz is enough for the pixel art while keeping the hidden core smooth.
+        guard frameCounter == 1 || frameCounter % 2 == 0 else { return }
+        refreshPresentation(runtime)
     }
 
     private func refreshPresentation(_ runtime: NativeBridgeRuntime) {
-        if let source = runtime.portraitBackgroundImage(height: portraitHeight),
-           let repaired = repairPortraitBackground(source) {
-            let texture = SKTexture(cgImage: repaired)
-            texture.filteringMode = .nearest
-            backgroundNode.texture = texture
+        let fieldNow = runtime.isLikelyFieldFrame()
+        if fieldNow {
+            fieldConfidence = min(6, fieldConfidence + 1)
+            cinematicConfidence = 0
+        } else {
+            cinematicConfidence = min(6, cinematicConfidence + 1)
+            fieldConfidence = 0
         }
 
+        if !fieldPresentationActive && fieldConfidence >= 2 {
+            fieldPresentationActive = true
+            resetFieldCalibration()
+        } else if fieldPresentationActive && cinematicConfidence >= 3 {
+            fieldPresentationActive = false
+            resetFieldCalibration(keepScene: true)
+        }
+
+        if fieldPresentationActive {
+            showField(runtime)
+        } else {
+            showCinematic(runtime)
+        }
+    }
+
+    private func showField(_ runtime: NativeBridgeRuntime) {
+        cinematicNode.isHidden = true
+        backgroundNode.isHidden = false
+        actorLayer.isHidden = false
+
+        // Resolve the live authored scene periodically by its resource pointer in
+        // work RAM. If the current build of the game does not expose that pointer,
+        // the first field remains a safe fallback rather than showing corrupt VRAM.
+        if frameCounter % 30 == 0 || currentScene == nil {
+            resolveCurrentScene(runtime)
+        }
+
+        updateFieldCamera(runtime)
+        refreshFieldBackground(runtime)
         refreshActors(runtime)
         refreshOriginalUI(runtime)
     }
 
-    /// The original engine streams a rolling tilemap around a 240x160 hardware
-    /// viewport. The extra portrait rows can temporarily expose unpopulated rows.
-    /// Replace only those empty rows with the nearest valid authored row instead of
-    /// exposing full-width black bands to the player.
-    private func repairPortraitBackground(_ image: CGImage) -> CGImage? {
-        guard image.width == 240,
-              image.height == portraitHeight,
-              let providerData = image.dataProvider?.data,
-              let source = CFDataGetBytePtr(providerData) else {
-            return image
+    private func showCinematic(_ runtime: NativeBridgeRuntime) {
+        backgroundNode.isHidden = true
+        actorLayer.isHidden = true
+        hudNode.isHidden = true
+        dialogueNode.isHidden = true
+        cinematicNode.isHidden = false
+
+        if let image = runtime.cinematicPortraitImage(height: portraitHeight) {
+            let texture = SKTexture(cgImage: image)
+            texture.filteringMode = .nearest
+            cinematicNode.texture = texture
         }
+    }
 
-        let width = image.width
-        let height = image.height
-        let bytesPerPixel = 4
-        let bytesPerRow = width * bytesPerPixel
-        var rgba = [UInt8](repeating: 0, count: bytesPerRow * height)
-        let byteCount = rgba.count
-        rgba.withUnsafeMutableBytes { destination in
-            destination.copyBytes(from: UnsafeRawBufferPointer(start: source, count: byteCount))
+    private func resolveCurrentScene(_ runtime: NativeBridgeRuntime) {
+        guard let rom else { return }
+
+        var descriptor = runtime.activeSceneDescriptorOffset(candidates: sceneDescriptors)
+        if descriptor == nil && !usedFirstSceneFallback {
+            descriptor = ALFPSceneData.firstSceneDescriptorOffset
+            usedFirstSceneFallback = true
         }
+        guard let descriptor else { return }
+        guard descriptor != currentSceneDescriptor || currentScene == nil else { return }
 
-        let centerStart = verticalExtension
-        let centerEnd = centerStart + originalViewportHeight
-
-        func rowLooksEmpty(_ y: Int) -> Bool {
-            let row = y * bytesPerRow
-            var dark = 0
-            var nearFirst = 0
-            let r0 = Int(rgba[row])
-            let g0 = Int(rgba[row + 1])
-            let b0 = Int(rgba[row + 2])
-
-            for x in 0..<width {
-                let offset = row + x * 4
-                let r = Int(rgba[offset])
-                let g = Int(rgba[offset + 1])
-                let b = Int(rgba[offset + 2])
-                if r + g + b < 30 { dark += 1 }
-                if abs(r - r0) + abs(g - g0) + abs(b - b0) < 8 { nearFirst += 1 }
+        do {
+            let decoded: ALFPSceneData.IndexedScene
+            if let cached = sceneCache[descriptor] {
+                decoded = cached
+            } else {
+                decoded = try ALFPSceneData.decodeScene(in: rom, at: descriptor)
+                sceneCache[descriptor] = decoded
             }
-
-            return dark > Int(Double(width) * 0.72) || nearFirst > Int(Double(width) * 0.95)
-        }
-
-        func copyRow(from sourceY: Int, to destinationY: Int) {
-            let sourceStart = sourceY * bytesPerRow
-            let destinationStart = destinationY * bytesPerRow
-            let rowCopy = Array(rgba[sourceStart..<(sourceStart + bytesPerRow)])
-            rgba.replaceSubrange(
-                destinationStart..<(destinationStart + bytesPerRow),
-                with: rowCopy
-            )
-        }
-
-        // Repair upwards from the known-live hardware viewport.
-        if centerStart > 0 {
-            for y in stride(from: centerStart - 1, through: 0, by: -1) {
-                if rowLooksEmpty(y) { copyRow(from: y + 1, to: y) }
+            currentSceneDescriptor = descriptor
+            currentScene = decoded
+            currentSceneImage = runtime.colorizedSceneImage(decoded)
+            resetFieldCalibration(keepScene: true)
+        } catch {
+            // A false-positive live pointer must never destroy a working field view.
+            if currentScene == nil,
+               let fallback = try? ALFPSceneData.decodeFirstScene(in: rom) {
+                currentSceneDescriptor = fallback.descriptorOffset
+                currentScene = fallback
+                sceneCache[fallback.descriptorOffset] = fallback
+                currentSceneImage = runtime.colorizedSceneImage(fallback)
             }
         }
+    }
 
-        // Repair downwards from the known-live hardware viewport.
-        if centerEnd < height {
-            for y in centerEnd..<height {
-                if rowLooksEmpty(y) { copyRow(from: y - 1, to: y) }
+    private func updateFieldCamera(_ runtime: NativeBridgeRuntime) {
+        guard let scene = currentScene else { return }
+        let offsets = runtime.backgroundOffsets()
+        let scroll = offsets.max(by: { $0.index < $1.index })
+
+        if cameraTopLeftX == nil || cameraTopLeftY == nil {
+            if let player = runtime.playerSpriteCandidate() {
+                let playerCenterX = Double(player.screenX) + Double(player.width) * 0.5
+                let playerFootY = Double(player.screenY + player.height - 2)
+                cameraTopLeftX = Double(scene.spawnX) - playerCenterX
+                cameraTopLeftY = Double(scene.spawnY) - playerFootY
+            } else {
+                cameraTopLeftX = Double(scene.spawnX - 120)
+                cameraTopLeftY = Double(scene.spawnY - 80)
             }
+            lastScroll = scroll
+            return
         }
 
-        return makeRGBAImage(rgba, width: width, height: height)
+        if let scroll, let previous = lastScroll, scroll.index == previous.index {
+            cameraTopLeftX! += Double(wrappedDelta(from: previous.x, to: scroll.x, modulus: 512))
+            cameraTopLeftY! += Double(wrappedDelta(from: previous.y, to: scroll.y, modulus: 512))
+        }
+        lastScroll = scroll
+    }
+
+    private func refreshFieldBackground(_ runtime: NativeBridgeRuntime) {
+        if frameCounter % 240 == 0, let scene = currentScene {
+            // Palette changes (lighting, scripted scenes) should recolor the authored
+            // map without rebuilding/decompressing it every presentation frame.
+            currentSceneImage = runtime.colorizedSceneImage(scene)
+        }
+
+        guard let scene = currentScene,
+              let image = currentSceneImage,
+              let cameraX = cameraTopLeftX,
+              let cameraY = cameraTopLeftY else {
+            if let fallback = runtime.portraitBackgroundImage(height: portraitHeight) {
+                installBackgroundTexture(fallback)
+            }
+            return
+        }
+
+        let maxX = max(0, scene.width - 240)
+        let maxY = max(0, scene.height - portraitHeight)
+        let cropX = min(max(Int(cameraX.rounded()), 0), maxX)
+        let portraitTop = Int(cameraY.rounded()) - verticalExtension
+        let cropY = min(max(portraitTop, 0), maxY)
+
+        if let crop = image.cropping(to: CGRect(x: cropX, y: cropY, width: 240, height: portraitHeight)) {
+            installBackgroundTexture(crop)
+        } else if let fallback = runtime.portraitBackgroundImage(height: portraitHeight) {
+            installBackgroundTexture(fallback)
+        }
+    }
+
+    private func installBackgroundTexture(_ image: CGImage) {
+        let texture = SKTexture(cgImage: image)
+        texture.filteringMode = .nearest
+        backgroundNode.texture = texture
     }
 
     private func refreshActors(_ runtime: NativeBridgeRuntime) {
         actorLayer.removeAllChildren()
 
         for sprite in runtime.spriteFrames() {
-            // The original HUD uses OAM at the top of the 160px hardware viewport.
-            // Suppress only those HUD objects; keep the player/NPC/enemy OAM visible.
-            if sprite.screenY >= 0 && sprite.screenY < 38 { continue }
+            // Ignore OAM objects that belong to the original top HUD. The iPhone
+            // HUD is composited separately from the authentic framebuffer below.
+            if sprite.screenY >= 0 && sprite.screenY < 34 { continue }
+            // Only live hardware-visible actors are authoritative. Old OAM slots
+            // outside this range are stale and caused phantom characters/bands.
+            if sprite.screenY < -48 || sprite.screenY > 184 { continue }
 
             let targetTopY = sprite.screenY + verticalExtension
             let centerX = CGFloat(sprite.screenX) + CGFloat(sprite.width) * 0.5
             let centerYFromTop = CGFloat(targetTopY) + CGFloat(sprite.height) * 0.5
             let spriteKitY = CGFloat(portraitHeight) - centerYFromTop
-
-            if centerYFromTop + CGFloat(sprite.height) < 0 || centerYFromTop > CGFloat(portraitHeight) {
-                continue
-            }
+            if centerYFromTop + CGFloat(sprite.height) < 0 || centerYFromTop > CGFloat(portraitHeight) { continue }
 
             let texture = SKTexture(cgImage: sprite.image)
             texture.filteringMode = .nearest
@@ -196,87 +291,143 @@ final class PortGameScene: SKScene {
         }
     }
 
-    /// Restore cartridge-native UI/text on top of the native tall world. The old
-    /// emulator viewport never becomes visible: only the UI strips are cropped.
     private func refreshOriginalUI(_ runtime: NativeBridgeRuntime) {
-        guard let frame = runtime.framebufferImage() else { return }
+        guard let frame = runtime.framebufferImage() else {
+            hudNode.isHidden = true
+            dialogueNode.isHidden = true
+            return
+        }
 
-        if let hud = crop(frame, x: 0, y: 0, width: 240, height: hudHeight) {
+        if looksLikeHUD(frame),
+           let hud = crop(frame, x: 0, y: 0, width: 240, height: hudHeight) {
             let texture = SKTexture(cgImage: hud)
             texture.filteringMode = .nearest
             hudNode.texture = texture
             hudNode.isHidden = false
+        } else {
+            hudNode.isHidden = true
         }
 
-        let showDialogue = looksLikeDialogue(frame)
-        dialogueNode.isHidden = !showDialogue
-        if showDialogue,
-           let dialogue = crop(
-                frame,
-                x: 0,
-                y: originalViewportHeight - dialogueHeight,
-                width: 240,
-                height: dialogueHeight
-           ) {
+        if let rect = dialogueRect(in: frame),
+           let dialogue = frame.cropping(to: rect) {
             let texture = SKTexture(cgImage: dialogue)
             texture.filteringMode = .nearest
             dialogueNode.texture = texture
+            let aspect = CGFloat(dialogue.width) / CGFloat(max(dialogue.height, 1))
+            let targetWidth: CGFloat = 216
+            let targetHeight = min(112, max(40, targetWidth / aspect))
+            dialogueNode.size = CGSize(width: targetWidth, height: targetHeight)
+            dialogueNode.position = CGPoint(x: 120, y: 48)
+            dialogueNode.isHidden = false
+        } else {
+            dialogueNode.isHidden = true
         }
     }
 
-    private func looksLikeDialogue(_ image: CGImage) -> Bool {
+    private func looksLikeHUD(_ image: CGImage) -> Bool {
+        let stats = pixelStats(image, rect: CGRect(x: 0, y: 0, width: 240, height: hudHeight))
+        // A real LoG II HUD contains a large dark frame plus bright text/bars.
+        // Ordinary terrain at the top of the GBA view should not pass this.
+        return stats.darkRatio > 0.34 && stats.brightRatio > 0.018
+    }
+
+    /// Find the actual dialogue box instead of assuming it lives in the bottom
+    /// 72 pixels. The old assumption is why text appeared only after the R-button
+    /// changed the cartridge UI position.
+    private func dialogueRect(in image: CGImage) -> CGRect? {
         guard let data = image.dataProvider?.data,
               let bytes = CFDataGetBytePtr(data),
               image.width == 240,
-              image.height == originalViewportHeight else { return false }
+              image.height == originalViewportHeight else { return nil }
 
-        let startY = originalViewportHeight - dialogueHeight
         let rowBytes = image.bytesPerRow
-        let pixelStride = max(4, image.bitsPerPixel / 8)
+        let strideBytes = max(4, image.bitsPerPixel / 8)
+        var borderRows: [Int] = []
+
+        for y in 38..<159 {
+            var bright = 0
+            var dark = 0
+            for x in 0..<240 {
+                let offset = y * rowBytes + x * strideBytes
+                let sum = Int(bytes[offset]) + Int(bytes[offset + 1]) + Int(bytes[offset + 2])
+                if sum > 620 { bright += 1 }
+                if sum < 105 { dark += 1 }
+            }
+            if bright >= 72 && dark >= 52 { borderRows.append(y) }
+        }
+
+        if let first = borderRows.first,
+           let last = borderRows.last,
+           last - first >= 15,
+           last - first <= 108 {
+            let top = max(30, first - 4)
+            let bottom = min(160, last + 5)
+            return CGRect(x: 6, y: top, width: 228, height: bottom - top)
+        }
+
+        // Some dialogue skins do not have a full white border. Fall back to a
+        // broad lower-screen text signature, but never key this to L/R state.
+        let fallback = CGRect(x: 12, y: 72, width: 216, height: 84)
+        let stats = pixelStats(image, rect: fallback)
+        if stats.darkRatio > 0.46 && stats.brightRatio > 0.025 {
+            return fallback
+        }
+        return nil
+    }
+
+    private func pixelStats(_ image: CGImage, rect: CGRect) -> (darkRatio: Double, brightRatio: Double) {
+        guard let data = image.dataProvider?.data,
+              let bytes = CFDataGetBytePtr(data) else { return (0, 0) }
+        let rowBytes = image.bytesPerRow
+        let strideBytes = max(4, image.bitsPerPixel / 8)
+        let minX = max(0, Int(rect.minX))
+        let maxX = min(image.width, Int(rect.maxX))
+        let minY = max(0, Int(rect.minY))
+        let maxY = min(image.height, Int(rect.maxY))
         var dark = 0
         var bright = 0
         var samples = 0
-
-        for y in startY..<originalViewportHeight {
-            for x in stride(from: 0, to: 240, by: 2) {
-                let offset = y * rowBytes + x * pixelStride
-                let c0 = Int(bytes[offset])
-                let c1 = Int(bytes[offset + 1])
-                let c2 = Int(bytes[offset + 2])
-                let sum = c0 + c1 + c2
+        for y in minY..<maxY {
+            for x in stride(from: minX, to: maxX, by: 2) {
+                let offset = y * rowBytes + x * strideBytes
+                let sum = Int(bytes[offset]) + Int(bytes[offset + 1]) + Int(bytes[offset + 2])
                 if sum < 120 { dark += 1 }
-                if sum > 650 { bright += 1 }
+                if sum > 620 { bright += 1 }
                 samples += 1
             }
         }
-
-        let darkRatio = Double(dark) / Double(max(samples, 1))
-        let brightRatio = Double(bright) / Double(max(samples, 1))
-        return darkRatio > 0.28 && brightRatio > 0.015
+        let count = Double(max(samples, 1))
+        return (Double(dark) / count, Double(bright) / count)
     }
 
     private func crop(_ image: CGImage, x: Int, y: Int, width: Int, height: Int) -> CGImage? {
         image.cropping(to: CGRect(x: x, y: y, width: width, height: height))
     }
 
-    private func makeRGBAImage(_ rgba: [UInt8], width: Int, height: Int) -> CGImage? {
-        guard let provider = CGDataProvider(data: Data(rgba) as CFData) else { return nil }
-        return CGImage(
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bitsPerPixel: 32,
-            bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
-            provider: provider,
-            decode: nil,
-            shouldInterpolate: false,
-            intent: .defaultIntent
-        )
+    private func wrappedDelta(from old: Int, to new: Int, modulus: Int) -> Int {
+        var delta = new - old
+        let half = modulus / 2
+        if delta > half { delta -= modulus }
+        if delta < -half { delta += modulus }
+        return delta
+    }
+
+    private func resetFieldCalibration(keepScene: Bool = false) {
+        cameraTopLeftX = nil
+        cameraTopLeftY = nil
+        lastScroll = nil
+        if !keepScene {
+            currentScene = nil
+            currentSceneImage = nil
+            currentSceneDescriptor = nil
+        }
     }
 
     private func installFailureWorld(message: String) {
+        backgroundNode.isHidden = true
+        cinematicNode.isHidden = true
+        actorLayer.isHidden = true
+
         let label = SKLabelNode(text: "Native portrait runtime failed")
         label.fontName = "Menlo-Bold"
         label.fontSize = 11
