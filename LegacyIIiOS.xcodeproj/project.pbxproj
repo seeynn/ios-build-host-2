@@ -20,7 +20,7 @@ S1 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B1,B2,B
 F1 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (BPKG1,BPKG2); runOnlyForDeploymentPostprocessing = 0; };
 R1 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 PKGREF1 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/EclipseEmu/core-mgba.git"; requirement = {kind = revision; revision = f24c252c718cd9291d7d5e63f509db76897e7481;};};
-PKGREF2 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/eclipseemu/eclipsekit.git"; requirement = {kind = revision; revision = a7236f6fe0401809e5dc9d84531210c2e81bf88e;};};
+PKGREF2 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/eclipseemu/eclipsekit.git"; requirement = {kind = branch; branch = main;};};
 PKGPROD1 = {isa = XCSwiftPackageProductDependency; package = PKGREF1; productName = mGBAEclipseCore;};
 PKGPROD2 = {isa = XCSwiftPackageProductDependency; package = PKGREF2; productName = EclipseKit;};
 C1 = {isa = XCConfigurationList; buildConfigurations = (PCD,PCR); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
