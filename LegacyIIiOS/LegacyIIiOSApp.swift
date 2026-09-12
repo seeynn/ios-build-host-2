@@ -2,27 +2,21 @@ import SwiftUI
 import UIKit
 
 @main
-struct LegacyIIiOSApp: App {
-    var body: some Scene {
-        WindowGroup {
-            FullscreenRootController()
-                .ignoresSafeArea(.all)
-        }
-    }
-}
+final class LegacyIIAppDelegate: UIResponder, UIApplicationDelegate {
+    var window: UIWindow?
 
-private struct FullscreenRootController: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> UIViewController {
-        let controller = FullscreenHostingController(rootView: RootView())
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        let controller = FullscreenHostingController(rootView: RootView().ignoresSafeArea(.all))
         controller.view.backgroundColor = .black
-        controller.modalPresentationCapturesStatusBarAppearance = true
-        return controller
-    }
-
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        uiViewController.setNeedsStatusBarAppearanceUpdate()
-        uiViewController.setNeedsUpdateOfHomeIndicatorAutoHidden()
-        uiViewController.setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+        window.rootViewController = controller
+        window.backgroundColor = .black
+        window.makeKeyAndVisible()
+        self.window = window
+        return true
     }
 }
 
@@ -30,6 +24,14 @@ private final class FullscreenHostingController<Content: View>: UIHostingControl
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
     override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .all }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
+    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation { .portrait }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        view.insetsLayoutMarginsFromSafeArea = false
+    }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
