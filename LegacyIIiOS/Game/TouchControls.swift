@@ -8,30 +8,31 @@ struct TouchControls: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
+                // L/R remain easy to hit but visually recess into the screen edges.
                 HStack {
                     shoulder(label: "L") { scene.input.l = $0 }
                     Spacer()
                     shoulder(label: "R") { scene.input.r = $0 }
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, max(24, geo.safeAreaInsets.top + 8))
-                .frame(maxHeight: .infinity, alignment: .top)
+                .padding(.horizontal, 10)
+                .offset(y: geo.size.height * 0.34)
 
-                VStack {
+                VStack(spacing: 0) {
                     Spacer()
+
                     HStack(alignment: .bottom) {
                         dPad
-                        Spacer()
+                        Spacer(minLength: 28)
                         actionCluster
                     }
                     .padding(.horizontal, 18)
-                    .padding(.bottom, max(74, geo.safeAreaInsets.bottom + 48))
 
-                    HStack(spacing: 14) {
+                    HStack(spacing: 12) {
                         holdCapsule("SELECT") { scene.input.select = $0 }
                         holdCapsule("START") { scene.input.start = $0 }
                     }
-                    .padding(.bottom, max(8, geo.safeAreaInsets.bottom + 2))
+                    .padding(.top, 14)
+                    .padding(.bottom, max(18, geo.safeAreaInsets.bottom + 8))
                 }
             }
         }
@@ -42,46 +43,49 @@ struct TouchControls: View {
         ZStack {
             Circle()
                 .fill(.black.opacity(0.24))
-                .overlay(Circle().stroke(.white.opacity(0.16), lineWidth: 1))
+                .overlay(Circle().stroke(.white.opacity(0.17), lineWidth: 0.8))
 
             Rectangle()
-                .fill(.white.opacity(0.055))
-                .frame(width: 34, height: 108)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .fill(.black.opacity(0.22))
+                .frame(width: 30, height: 92)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
 
             Rectangle()
-                .fill(.white.opacity(0.055))
-                .frame(width: 108, height: 34)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .fill(.black.opacity(0.22))
+                .frame(width: 92, height: 30)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
 
             VStack {
-                Text("▲")
+                Image(systemName: "triangle.fill")
                 Spacer()
-                Text("▼")
+                Image(systemName: "triangle.fill")
+                    .rotationEffect(.degrees(180))
             }
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(.white.opacity(0.38))
-            .padding(.vertical, 17)
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.white.opacity(0.46))
+            .padding(.vertical, 15)
 
             HStack {
-                Text("◀")
+                Image(systemName: "triangle.fill")
+                    .rotationEffect(.degrees(-90))
                 Spacer()
-                Text("▶")
+                Image(systemName: "triangle.fill")
+                    .rotationEffect(.degrees(90))
             }
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(.white.opacity(0.38))
-            .padding(.horizontal, 17)
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.white.opacity(0.46))
+            .padding(.horizontal, 15)
         }
-        .frame(width: 132, height: 132)
+        .frame(width: 112, height: 112)
         .contentShape(Circle())
         .gesture(
-            DragGesture(minimumDistance: 0)
+            DragGesture(minimumDistance: 0, coordinateSpace: .local)
                 .onChanged { value in
                     if !dPadActive {
                         dPadActive = true
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.24)
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.20)
                     }
-                    updateDPad(at: value.location, size: 132)
+                    updateDPad(at: value.location, size: 112)
                 }
                 .onEnded { _ in
                     dPadActive = false
@@ -94,12 +98,26 @@ struct TouchControls: View {
         let center = size * 0.5
         let dx = location.x - center
         let dy = location.y - center
-        let deadZone: CGFloat = 12
+        let radius = sqrt(dx * dx + dy * dy)
+        let deadZone: CGFloat = 11
 
-        scene.input.left = dx < -deadZone
-        scene.input.right = dx > deadZone
-        scene.input.up = dy < -deadZone
-        scene.input.down = dy > deadZone
+        guard radius > deadZone else {
+            clearDPad()
+            return
+        }
+
+        // Use a slightly wider diagonal gate than the old independent-axis test.
+        // This prevents accidental diagonal movement when a thumb is only a few
+        // pixels off the intended cardinal direction.
+        let angle = atan2(dy, dx)
+        let horizontal = abs(cos(angle))
+        let vertical = abs(sin(angle))
+        let diagonalThreshold: CGFloat = 0.46
+
+        scene.input.left = dx < 0 && horizontal > diagonalThreshold
+        scene.input.right = dx > 0 && horizontal > diagonalThreshold
+        scene.input.up = dy < 0 && vertical > diagonalThreshold
+        scene.input.down = dy > 0 && vertical > diagonalThreshold
     }
 
     private func clearDPad() {
@@ -110,22 +128,22 @@ struct TouchControls: View {
     }
 
     private var actionCluster: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             holdCircle("B", subtitle: "KI") { scene.input.b = $0 }
-                .offset(y: 12)
+                .offset(y: 10)
             holdCircle("A", subtitle: "ATTACK") { scene.input.a = $0 }
-                .offset(y: -10)
+                .offset(y: -8)
         }
     }
 
     private func shoulder(label: String, changed: @escaping (Bool) -> Void) -> some View {
-        HoldSurface(shape: AnyShape(RoundedRectangle(cornerRadius: 18)), changed: changed) { pressed in
+        HoldSurface(shape: AnyShape(Capsule()), changed: changed) { pressed in
             Text(label)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundStyle(.white.opacity(pressed ? 0.78 : 0.34))
-                .frame(width: 64, height: 36)
-                .background(.black.opacity(pressed ? 0.40 : 0.22), in: RoundedRectangle(cornerRadius: 18))
-                .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(pressed ? 0.34 : 0.14), lineWidth: 1))
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(pressed ? 0.76 : 0.30))
+                .frame(width: 70, height: 30)
+                .background(.black.opacity(pressed ? 0.34 : 0.16), in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(pressed ? 0.30 : 0.10), lineWidth: 0.8))
         }
     }
 
@@ -133,27 +151,27 @@ struct TouchControls: View {
         HoldSurface(shape: AnyShape(Circle()), changed: changed) { pressed in
             VStack(spacing: 1) {
                 Text(label)
-                    .font(.system(size: 21, weight: .black, design: .rounded))
+                    .font(.system(size: 19, weight: .black, design: .rounded))
                 Text(subtitle)
-                    .font(.system(size: 7, weight: .bold, design: .rounded))
-                    .tracking(0.6)
+                    .font(.system(size: 6.5, weight: .bold, design: .rounded))
+                    .tracking(0.5)
             }
-            .foregroundStyle(.white.opacity(pressed ? 0.82 : 0.46))
-            .frame(width: 70, height: 70)
-            .background(.black.opacity(pressed ? 0.44 : 0.28), in: Circle())
-            .overlay(Circle().stroke(.white.opacity(pressed ? 0.36 : 0.16), lineWidth: 1))
+            .foregroundStyle(.white.opacity(pressed ? 0.84 : 0.46))
+            .frame(width: 60, height: 60)
+            .background(.black.opacity(pressed ? 0.40 : 0.23), in: Circle())
+            .overlay(Circle().stroke(.white.opacity(pressed ? 0.34 : 0.14), lineWidth: 0.8))
         }
     }
 
     private func holdCapsule(_ label: String, changed: @escaping (Bool) -> Void) -> some View {
         HoldSurface(shape: AnyShape(Capsule()), changed: changed) { pressed in
             Text(label)
-                .font(.system(size: 8, weight: .bold, design: .rounded))
-                .tracking(0.8)
-                .foregroundStyle(.white.opacity(pressed ? 0.72 : 0.32))
-                .frame(width: 64, height: 27)
-                .background(.black.opacity(pressed ? 0.40 : 0.22), in: Capsule())
-                .overlay(Capsule().stroke(.white.opacity(pressed ? 0.30 : 0.12), lineWidth: 1))
+                .font(.system(size: 7.5, weight: .bold, design: .rounded))
+                .tracking(0.7)
+                .foregroundStyle(.white.opacity(pressed ? 0.70 : 0.30))
+                .frame(width: 58, height: 24)
+                .background(.black.opacity(pressed ? 0.35 : 0.16), in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(pressed ? 0.28 : 0.10), lineWidth: 0.8))
         }
     }
 }
@@ -173,13 +191,19 @@ private struct HoldSurface<Content: View>: View {
                         guard !pressed else { return }
                         pressed = true
                         changed(true)
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.28)
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.22)
                     }
                     .onEnded { _ in
                         pressed = false
                         changed(false)
                     }
             )
+            .onDisappear {
+                if pressed {
+                    pressed = false
+                    changed(false)
+                }
+            }
     }
 }
 
