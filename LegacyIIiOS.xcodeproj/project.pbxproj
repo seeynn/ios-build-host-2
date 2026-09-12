@@ -1,0 +1,32 @@
+// !$*UTF8*$!
+{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+A1 = {isa = PBXProject; attributes = {LastSwiftUpdateCheck = 2600; LastUpgradeCheck = 2600;}; buildConfigurationList = C1; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; mainGroup = G0; packageReferences = (PKGREF1,PKGREF2); productRefGroup = GP; projectDirPath = ""; projectRoot = ""; targets = (T1); };
+T1 = {isa = PBXNativeTarget; buildConfigurationList = C2; buildPhases = (S1,F1,R1); buildRules = (); dependencies = (); name = LegacyIIiOS; packageProductDependencies = (PKGPROD1,PKGPROD2); productName = LegacyIIiOS; productReference = P1; productType = "com.apple.product-type.application"; };
+G0 = {isa = PBXGroup; children = (G1,GP); sourceTree = "<group>"; };
+GP = {isa = PBXGroup; children = (P1); name = Products; sourceTree = "<group>"; };
+G1 = {isa = PBXGroup; children = (SW1,SW2,SW3,SW4,SW5,SW6,SW7,SW8,PL1); path = LegacyIIiOS; sourceTree = "<group>"; };
+P1 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LegacyIIiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+SW1 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyIIiOSApp.swift; sourceTree = "<group>"; };
+SW2 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RootView.swift; path = Game/RootView.swift; sourceTree = "<group>"; };
+SW3 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PortraitEmulatorView.swift; path = Game/PortraitEmulatorView.swift; sourceTree = "<group>"; };
+SW4 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PortraitEmulatorControls.swift; path = Game/PortraitEmulatorControls.swift; sourceTree = "<group>"; };
+SW5 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ROMImage.swift; path = Core/ROMImage.swift; sourceTree = "<group>"; };
+SW6 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ROMLibrary.swift; path = Runtime/ROMLibrary.swift; sourceTree = "<group>"; };
+SW7 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EmulatorBridge.swift; path = Runtime/EmulatorBridge.swift; sourceTree = "<group>"; };
+SW8 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CompatibilityEmulator.swift; path = Runtime/CompatibilityEmulator.swift; sourceTree = "<group>"; };
+PL1 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+B1={isa=PBXBuildFile;fileRef=SW1;}; B2={isa=PBXBuildFile;fileRef=SW2;}; B3={isa=PBXBuildFile;fileRef=SW3;}; B4={isa=PBXBuildFile;fileRef=SW4;}; B5={isa=PBXBuildFile;fileRef=SW5;}; B6={isa=PBXBuildFile;fileRef=SW6;}; B7={isa=PBXBuildFile;fileRef=SW7;}; B8={isa=PBXBuildFile;fileRef=SW8;}; BPKG1={isa=PBXBuildFile;productRef=PKGPROD1;}; BPKG2={isa=PBXBuildFile;productRef=PKGPROD2;};
+S1 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B1,B2,B3,B4,B5,B6,B7,B8); runOnlyForDeploymentPostprocessing = 0; };
+F1 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (BPKG1,BPKG2); runOnlyForDeploymentPostprocessing = 0; };
+R1 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+PKGREF1 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/EclipseEmu/core-mgba.git"; requirement = {kind = revision; revision = f24c252c718cd9291d7d5e63f509db76897e7481;};};
+PKGREF2 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/eclipseemu/eclipsekit.git"; requirement = {kind = revision; revision = a7236f6fe0401809e5dc9d84531210c2e81bf88e;};};
+PKGPROD1 = {isa = XCSwiftPackageProductDependency; package = PKGREF1; productName = mGBAEclipseCore;};
+PKGPROD2 = {isa = XCSwiftPackageProductDependency; package = PKGREF2; productName = EclipseKit;};
+C1 = {isa = XCConfigurationList; buildConfigurations = (PCD,PCR); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+C2 = {isa = XCConfigurationList; buildConfigurations = (TCD,TCR); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+PCD={isa=XCBuildConfiguration;buildSettings={IPHONEOS_DEPLOYMENT_TARGET=16.0;SDKROOT=iphoneos;SWIFT_VERSION=5.0;};name=Debug;};
+PCR={isa=XCBuildConfiguration;buildSettings={IPHONEOS_DEPLOYMENT_TARGET=16.0;SDKROOT=iphoneos;SWIFT_VERSION=5.0;};name=Release;};
+TCD={isa=XCBuildConfiguration;buildSettings={CODE_SIGN_STYLE=Automatic;CURRENT_PROJECT_VERSION=1;DEAD_CODE_STRIPPING=YES;GENERATE_INFOPLIST_FILE=NO;INFOPLIST_FILE=LegacyIIiOS/Info.plist;MARKETING_VERSION=1.0;PRODUCT_BUNDLE_IDENTIFIER=com.seeynn.legacy2iphone;PRODUCT_NAME="$(TARGET_NAME)";SUPPORTED_PLATFORMS="iphoneos iphonesimulator";SWIFT_VERSION=5.0;TARGETED_DEVICE_FAMILY=1;};name=Debug;};
+TCR={isa=XCBuildConfiguration;buildSettings={CODE_SIGN_STYLE=Automatic;CURRENT_PROJECT_VERSION=1;DEAD_CODE_STRIPPING=YES;GENERATE_INFOPLIST_FILE=NO;INFOPLIST_FILE=LegacyIIiOS/Info.plist;MARKETING_VERSION=1.0;PRODUCT_BUNDLE_IDENTIFIER=com.seeynn.legacy2iphone;PRODUCT_NAME="$(TARGET_NAME)";SUPPORTED_PLATFORMS="iphoneos iphonesimulator";SWIFT_VERSION=5.0;TARGETED_DEVICE_FAMILY=1;};name=Release;};
+}; rootObject = A1; }
