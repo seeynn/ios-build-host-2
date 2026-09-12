@@ -19,7 +19,7 @@ enum ALFPSceneDecodeError: Error, CustomStringConvertible {
         case .invalidGraphicsBank(let index, let size): return "Graphics bank \(index) decoded to \(size) bytes, expected 0x4000"
         case .invalidTileID(let id): return "Field map referenced assembled tile \(id) outside the tile atlas"
         case .malformedAssembly: return "Malformed ALFP field graphics assembly stream"
-        case .invalidAttributeMaskSize(let count): return "Expected 0x2000-byte ALFP tile attribute mask, got \(count) bytes"
+        case .invalidAttributeMaskSize(let count): return "Expected a 0x2000-byte ALFP tile attribute mask, got \(count) bytes"
         }
     }
 }
@@ -29,6 +29,7 @@ enum ALFPSceneData {
     static let standardLayerMethod: UInt32 = 0x080056F9
 
     struct IndexedScene {
+        let descriptorOffset: Int
         let width: Int
         let height: Int
         let pixels: [UInt8]
@@ -51,7 +52,60 @@ enum ALFPSceneData {
     private struct TileAtlas { let tiles: [[UInt8]] }
 
     static func decodeFirstScene(in rom: ROMImage) throws -> IndexedScene {
-        let scene = firstSceneDescriptorOffset
+        try decodeScene(in: rom, at: firstSceneDescriptorOffset)
+    }
+
+    /// Finds field-scene descriptors rather than only field-layer objects. A valid
+    /// scene owns three standard 1024x1024 layer descriptors plus the tile assembly,
+    /// bank table and an in-bounds spawn. This lets the iPhone renderer follow the
+    /// cartridge into new maps instead of keeping the first desert map forever.
+    static func scanSceneDescriptors(in rom: ROMImage) -> [Int] {
+        let data = rom.data
+        guard data.count > 0x60 else { return [] }
+        var result: [Int] = []
+        result.reserveCapacity(160)
+
+        for scene in stride(from: 0, through: data.count - 0x50, by: 4) {
+            let topPointer = fastU32(data, scene + 0x18)
+            guard let topOffset = fastROMOffset(topPointer, count: data.count),
+                  topOffset + 12 < data.count,
+                  fastU32(data, topOffset) == standardLayerMethod,
+                  fastU32(data, topOffset + 4) == 1024,
+                  fastU32(data, topOffset + 8) == 1024 else { continue }
+
+            let middlePointer = fastU32(data, scene + 0x1C)
+            let basePointer = fastU32(data, scene + 0x20)
+            guard let middleOffset = fastROMOffset(middlePointer, count: data.count),
+                  let baseOffset = fastROMOffset(basePointer, count: data.count),
+                  middleOffset + 12 < data.count,
+                  baseOffset + 12 < data.count,
+                  fastU32(data, middleOffset) == standardLayerMethod,
+                  fastU32(data, baseOffset) == standardLayerMethod,
+                  fastU32(data, middleOffset + 4) == 1024,
+                  fastU32(data, middleOffset + 8) == 1024,
+                  fastU32(data, baseOffset + 4) == 1024,
+                  fastU32(data, baseOffset + 8) == 1024 else { continue }
+
+            let assemblyPointer = fastU32(data, scene + 0x48)
+            let bankPointer = fastU32(data, scene + 0x4C)
+            guard fastROMOffset(assemblyPointer, count: data.count) != nil,
+                  fastROMOffset(bankPointer, count: data.count) != nil else { continue }
+
+            let packedSpawn = fastU32(data, scene + 0x30)
+            let spawnX = Int(packedSpawn & 0xFFFF)
+            let spawnY = Int((packedSpawn >> 16) & 0xFFFF)
+            guard spawnX >= 0, spawnX < 1024, spawnY >= 0, spawnY < 1024 else { continue }
+
+            result.append(scene)
+        }
+
+        if !result.contains(firstSceneDescriptorOffset) {
+            result.insert(firstSceneDescriptorOffset, at: 0)
+        }
+        return Array(Set(result)).sorted()
+    }
+
+    static func decodeScene(in rom: ROMImage, at scene: Int) throws -> IndexedScene {
         let top = try decodeStandardLayer(in: rom, pointer: try rom.u32(scene + 0x18))
         let middle = try decodeStandardLayer(in: rom, pointer: try rom.u32(scene + 0x1C))
         let base = try decodeStandardLayer(in: rom, pointer: try rom.u32(scene + 0x20))
@@ -78,7 +132,15 @@ enum ALFPSceneData {
         let spawnY = Int((packedSpawn >> 16) & 0xFFFF)
         let attributeB = try decodeWorldAttributePlane(in: rom, pointer: try rom.u32(scene + 0x38), layers: [top, middle, base])
 
-        return IndexedScene(width: 1024, height: 1024, pixels: pixels, spawnX: spawnX, spawnY: spawnY, attributeB: attributeB)
+        return IndexedScene(
+            descriptorOffset: scene,
+            width: 1024,
+            height: 1024,
+            pixels: pixels,
+            spawnX: spawnX,
+            spawnY: spawnY,
+            attributeB: attributeB
+        )
     }
 
     private static func decodeStandardLayer(in rom: ROMImage, pointer: UInt32) throws -> StandardLayer {
@@ -212,5 +274,19 @@ enum ALFPSceneData {
 
     private static func dataU16(_ data: Data, _ offset: Int) -> UInt16 {
         UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+    }
+
+    private static func fastU32(_ data: Data, _ offset: Int) -> UInt32 {
+        guard offset >= 0, offset + 3 < data.count else { return 0 }
+        return UInt32(data[offset])
+            | (UInt32(data[offset + 1]) << 8)
+            | (UInt32(data[offset + 2]) << 16)
+            | (UInt32(data[offset + 3]) << 24)
+    }
+
+    private static func fastROMOffset(_ pointer: UInt32, count: Int) -> Int? {
+        guard pointer >= 0x0800_0000, pointer < 0x0A00_0000 else { return nil }
+        let offset = Int(pointer - 0x0800_0000)
+        return offset >= 0 && offset < count ? offset : nil
     }
 }
