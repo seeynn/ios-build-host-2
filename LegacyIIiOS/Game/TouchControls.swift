@@ -8,29 +8,31 @@ struct TouchControls: View {
         GeometryReader { geo in
             let width = geo.size.width
             let height = geo.size.height
-            let bottom = max(20, geo.safeAreaInsets.bottom)
+            let bottom = max(12, geo.safeAreaInsets.bottom)
 
             ZStack(alignment: .topLeading) {
                 dPad
-                    .position(x: 76, y: height - bottom - 126)
+                    .position(x: 78, y: height - bottom - 130)
 
-                actionButton("A", subtitle: "ATTACK", diameter: 68) { scene.input.a = $0 }
-                    .position(x: width - 128, y: height - bottom - 158)
+                // Agreed phone layout: four semantic action buttons rather than
+                // exposing GBA shoulder labels to the player.
+                actionButton(icon: "hand.raised.fill", title: "ATTACK", diameter: 60) { scene.input.a = $0 }
+                    .position(x: width - 118, y: height - bottom - 182)
 
-                actionButton("B", subtitle: "KI", diameter: 64) { scene.input.b = $0 }
-                    .position(x: width - 62, y: height - bottom - 210)
+                actionButton(icon: "sparkles", title: "KI BLAST", diameter: 60) { scene.input.b = $0 }
+                    .position(x: width - 54, y: height - bottom - 226)
 
-                actionButton("L", subtitle: nil, diameter: 56) { scene.input.l = $0 }
-                    .position(x: width - 140, y: height - bottom - 86)
+                actionButton(icon: "shield.fill", title: "BLOCK", diameter: 56) { scene.input.r = $0 }
+                    .position(x: width - 124, y: height - bottom - 106)
 
-                actionButton("R", subtitle: nil, diameter: 56) { scene.input.r = $0 }
-                    .position(x: width - 64, y: height - bottom - 104)
+                actionButton(icon: "bolt.fill", title: "TRANSFORM", diameter: 56) { scene.input.l = $0 }
+                    .position(x: width - 56, y: height - bottom - 132)
 
                 capsule("SELECT") { scene.input.select = $0 }
-                    .position(x: width * 0.5 - 42, y: height - bottom - 27)
+                    .position(x: width * 0.5 - 42, y: height - bottom - 24)
 
                 capsule("START") { scene.input.start = $0 }
-                    .position(x: width * 0.5 + 42, y: height - bottom - 27)
+                    .position(x: width * 0.5 + 42, y: height - bottom - 24)
             }
             .frame(width: width, height: height)
         }
@@ -40,34 +42,35 @@ struct TouchControls: View {
     private var dPad: some View {
         ZStack {
             Circle()
-                .fill(.black.opacity(0.24))
+                .fill(.black.opacity(0.25))
                 .overlay(Circle().stroke(.white.opacity(0.22), lineWidth: 1))
 
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.black.opacity(0.24))
-                .frame(width: 32, height: 98)
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(.black.opacity(0.25))
+                .frame(width: 34, height: 104)
 
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.black.opacity(0.24))
-                .frame(width: 98, height: 32)
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(.black.opacity(0.25))
+                .frame(width: 104, height: 34)
 
             VStack {
                 Image(systemName: "triangle.fill")
                 Spacer()
                 Image(systemName: "triangle.fill").rotationEffect(.degrees(180))
             }
-            .padding(.vertical, 15)
+            .padding(.vertical, 16)
 
             HStack {
                 Image(systemName: "triangle.fill").rotationEffect(.degrees(-90))
                 Spacer()
                 Image(systemName: "triangle.fill").rotationEffect(.degrees(90))
             }
-            .padding(.horizontal, 15)
+            .padding(.horizontal, 16)
         }
-        .font(.system(size: 10, weight: .bold))
-        .foregroundStyle(.white.opacity(0.48))
-        .frame(width: 118, height: 118)
+        .font(.system(size: 10, weight: .black))
+        .foregroundStyle(.white.opacity(0.52))
+        .frame(width: 124, height: 124)
+        .padding(10)
         .overlay {
             DPadCapture { up, down, left, right in
                 scene.input.up = up
@@ -79,46 +82,44 @@ struct TouchControls: View {
     }
 
     private func actionButton(
-        _ label: String,
-        subtitle: String?,
+        icon: String,
+        title: String,
         diameter: CGFloat,
         changed: @escaping (Bool) -> Void
     ) -> some View {
         ZStack {
             Circle()
-                .fill(.black.opacity(0.28))
-                .overlay(Circle().stroke(.white.opacity(0.22), lineWidth: 1))
+                .fill(.black.opacity(0.30))
+                .overlay(Circle().stroke(.white.opacity(0.21), lineWidth: 1))
 
-            VStack(spacing: 1) {
-                Text(label)
-                    .font(.system(size: label.count == 1 ? 21 : 16, weight: .black, design: .rounded))
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.system(size: 7, weight: .bold, design: .rounded))
-                        .tracking(0.6)
-                }
+            VStack(spacing: 2) {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .bold))
+                Text(title)
+                    .font(.system(size: 6.4, weight: .black, design: .rounded))
+                    .tracking(0.35)
             }
-            .foregroundStyle(.white.opacity(0.58))
+            .foregroundStyle(.white.opacity(0.64))
         }
         .frame(width: diameter, height: diameter)
-        // The hit target is deliberately larger than the artwork. UIKit receives
-        // touch-down immediately, so taps no longer need a long/firm press.
-        .padding(9)
+        // The capture surface is substantially larger than the art. Touches fire
+        // on touch-down immediately; no long or forceful press is required.
+        .padding(12)
         .overlay { InstantHoldCapture(changed: changed) }
     }
 
     private func capsule(_ label: String, changed: @escaping (Bool) -> Void) -> some View {
         ZStack {
             Capsule()
-                .fill(.black.opacity(0.24))
-                .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
+                .fill(.black.opacity(0.23))
+                .overlay(Capsule().stroke(.white.opacity(0.17), lineWidth: 1))
             Text(label)
                 .font(.system(size: 8, weight: .bold, design: .rounded))
                 .tracking(0.8)
                 .foregroundStyle(.white.opacity(0.42))
         }
-        .frame(width: 66, height: 28)
-        .padding(7)
+        .frame(width: 66, height: 27)
+        .padding(9)
         .overlay { InstantHoldCapture(changed: changed) }
     }
 }
@@ -153,12 +154,11 @@ private final class HoldCaptureView: UIView {
         guard !pressed else { return }
         pressed = true
         changed(true)
-        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.16)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.12)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // Deliberately keep the button held while the thumb drifts. Mobile action
-        // buttons should not drop input because the finger moved a few pixels.
+        // Keep the button held while a thumb naturally drifts inside its large cell.
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { finishPress() }
@@ -168,8 +168,7 @@ private final class HoldCaptureView: UIView {
         guard pressed else { return }
         pressed = false
         let token = generation
-        // Guarantee several 60 Hz game frames even for a very fast tap.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.055) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.045) { [weak self] in
             guard let self, self.generation == token, !self.pressed else { return }
             self.changed(false)
         }
@@ -177,7 +176,7 @@ private final class HoldCaptureView: UIView {
 
     func cancelImmediately() {
         generation &+= 1
-        if pressed { pressed = false }
+        pressed = false
         changed(false)
     }
 }
@@ -209,7 +208,7 @@ private final class DPadCaptureView: UIView {
         guard activeTouch == nil, let touch = touches.first else { return }
         activeTouch = touch
         update(touch.location(in: self))
-        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.12)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.10)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -232,18 +231,19 @@ private final class DPadCaptureView: UIView {
         let dx = point.x - bounds.midX
         let dy = point.y - bounds.midY
         let radius = hypot(dx, dy)
-        let deadZone = min(bounds.width, bounds.height) * 0.13
+        let deadZone = min(bounds.width, bounds.height) * 0.09
         guard radius > deadZone else { release(); return }
 
         let angle = atan2(dy, dx)
         let horizontal = abs(cos(angle))
         let vertical = abs(sin(angle))
-        let gate: CGFloat = 0.43
-        let left = dx < 0 && horizontal > gate
-        let right = dx > 0 && horizontal > gate
-        let up = dy < 0 && vertical > gate
-        let down = dy > 0 && vertical > gate
-        changed(up, down, left, right)
+        let gate: CGFloat = 0.41
+        changed(
+            dy < 0 && vertical > gate,
+            dy > 0 && vertical > gate,
+            dx < 0 && horizontal > gate,
+            dx > 0 && horizontal > gate
+        )
     }
 
     func release() {
