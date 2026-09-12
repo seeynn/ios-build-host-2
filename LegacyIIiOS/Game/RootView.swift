@@ -9,7 +9,7 @@ struct RootView: View {
     var body: some View {
         Group {
             if library.installedROMURL != nil {
-                PortraitEmulatorView(library: library)
+                GameContainerView(library: library)
             } else {
                 importView
             }
@@ -46,16 +46,16 @@ struct RootView: View {
                     .font(.system(size: 26, weight: .black, design: .rounded))
                     .tracking(4)
                     .foregroundStyle(.white.opacity(0.88))
-                Text("PORTRAIT iPHONE PORT")
+                Text("NATIVE PORTRAIT iPHONE PORT")
                     .font(.system(size: 9, weight: .semibold, design: .rounded))
                     .tracking(2.2)
                     .foregroundStyle(.white.opacity(0.24))
                 Spacer().frame(height: 18)
-                Text("Choose your European Legacy of Goku II ROM once. The app copies it into its private storage and keeps your normal cartridge save between launches.")
+                Text("Import your European Legacy of Goku II ROM once. The game world is rendered natively for the tall iPhone screen; the original game runtime stays hidden underneath for live game state, sprites, audio and saves.")
                     .font(.system(size: 12, weight: .regular, design: .rounded))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.white.opacity(0.42))
-                    .frame(maxWidth: 290)
+                    .frame(maxWidth: 300)
                     .lineSpacing(3)
                 Button { importing = true } label: {
                     Text("IMPORT ALFP ROM")
