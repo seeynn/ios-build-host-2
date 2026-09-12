@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 struct TouchControls: View {
-    let scene: PortGameScene
+    @ObservedObject var scene: PortGameScene
 
     var body: some View {
         GeometryReader { geo in
@@ -11,30 +11,69 @@ struct TouchControls: View {
             let bottom = max(12, geo.safeAreaInsets.bottom)
 
             ZStack(alignment: .topLeading) {
-                dPad
-                    .position(x: 78, y: height - bottom - 130)
-
-                actionButton(key: "A", title: "ATTACK", diameter: 62) { scene.input.a = $0 }
-                    .position(x: width - 118, y: height - bottom - 182)
-
-                actionButton(key: "B", title: "KI", diameter: 62) { scene.input.b = $0 }
-                    .position(x: width - 54, y: height - bottom - 226)
-
-                actionButton(key: "R", title: "BLOCK", diameter: 58) { scene.input.r = $0 }
-                    .position(x: width - 124, y: height - bottom - 106)
-
-                actionButton(key: "L", title: "TRANSFORM", diameter: 58) { scene.input.l = $0 }
-                    .position(x: width - 56, y: height - bottom - 132)
-
-                capsule("SELECT") { scene.input.select = $0 }
-                    .position(x: width * 0.5 - 42, y: height - bottom - 24)
-
-                capsule("START") { scene.input.start = $0 }
-                    .position(x: width * 0.5 + 42, y: height - bottom - 24)
+                switch scene.controlMode {
+                case .gameplay:
+                    gameplayControls(width: width, height: height, bottom: bottom)
+                case .menu:
+                    menuControls(width: width, height: height, bottom: bottom)
+                case .cinematic:
+                    cinematicControls(width: width, height: height, bottom: bottom)
+                }
             }
             .frame(width: width, height: height)
         }
         .ignoresSafeArea(.all)
+    }
+
+    @ViewBuilder
+    private func gameplayControls(width: CGFloat, height: CGFloat, bottom: CGFloat) -> some View {
+        dPad
+            .position(x: 78, y: height - bottom - 130)
+
+        iconButton(symbol: "hand.raised.fill", title: "ATTACK", diameter: 62) { scene.input.a = $0 }
+            .position(x: width - 118, y: height - bottom - 182)
+
+        iconButton(symbol: "sparkles", title: "KI BLAST", diameter: 62) { scene.input.b = $0 }
+            .position(x: width - 54, y: height - bottom - 226)
+
+        iconButton(symbol: "shield.fill", title: "BLOCK", diameter: 58) { scene.input.r = $0 }
+            .position(x: width - 124, y: height - bottom - 106)
+
+        iconButton(symbol: "bolt.fill", title: "TRANSFORM", diameter: 58) { scene.input.l = $0 }
+            .position(x: width - 56, y: height - bottom - 132)
+
+        capsule("SELECT") { scene.input.select = $0 }
+            .position(x: width * 0.5 - 42, y: height - bottom - 24)
+
+        capsule("START") { scene.input.start = $0 }
+            .position(x: width * 0.5 + 42, y: height - bottom - 24)
+    }
+
+    @ViewBuilder
+    private func menuControls(width: CGFloat, height: CGFloat, bottom: CGFloat) -> some View {
+        dPad
+            .scaleEffect(0.82)
+            .position(x: 70, y: height - bottom - 88)
+
+        iconButton(symbol: "checkmark", title: "SELECT", diameter: 56) { scene.input.a = $0 }
+            .position(x: width - 62, y: height - bottom - 104)
+
+        iconButton(symbol: "arrow.uturn.backward", title: "BACK", diameter: 48) { scene.input.b = $0 }
+            .position(x: width - 130, y: height - bottom - 62)
+
+        capsule("START") { scene.input.start = $0 }
+            .position(x: width * 0.5, y: height - bottom - 22)
+    }
+
+    @ViewBuilder
+    private func cinematicControls(width: CGFloat, height: CGFloat, bottom: CGFloat) -> some View {
+        iconButton(symbol: "forward.fill", title: "CONTINUE", diameter: 52) { scene.input.a = $0 }
+            .opacity(0.56)
+            .position(x: width - 48, y: height - bottom - 54)
+
+        capsule("START") { scene.input.start = $0 }
+            .opacity(0.48)
+            .position(x: width * 0.5, y: height - bottom - 20)
     }
 
     private var dPad: some View {
@@ -66,7 +105,7 @@ struct TouchControls: View {
             .padding(.horizontal, 16)
         }
         .font(.system(size: 10, weight: .black))
-        .foregroundStyle(.white.opacity(0.62))
+        .foregroundStyle(.white.opacity(0.66))
         .frame(width: 124, height: 124)
         .padding(10)
         .overlay {
@@ -79,8 +118,8 @@ struct TouchControls: View {
         }
     }
 
-    private func actionButton(
-        key: String,
+    private func iconButton(
+        symbol: String,
         title: String,
         diameter: CGFloat,
         changed: @escaping (Bool) -> Void
@@ -88,20 +127,18 @@ struct TouchControls: View {
         ZStack {
             Circle()
                 .fill(.black.opacity(0.34))
-                .overlay(Circle().stroke(.white.opacity(0.28), lineWidth: 1))
+                .overlay(Circle().stroke(.white.opacity(0.30), lineWidth: 1))
 
-            VStack(spacing: 0) {
-                Text(key)
-                    .font(.system(size: 20, weight: .black, design: .rounded))
+            VStack(spacing: 3) {
+                Image(systemName: symbol)
+                    .font(.system(size: diameter > 56 ? 20 : 18, weight: .bold))
                 Text(title)
-                    .font(.system(size: title == "TRANSFORM" ? 5.5 : 6.4, weight: .black, design: .rounded))
-                    .tracking(0.45)
+                    .font(.system(size: title == "TRANSFORM" ? 5.2 : 6.2, weight: .black, design: .rounded))
+                    .tracking(0.42)
             }
-            .foregroundStyle(.white.opacity(0.78))
+            .foregroundStyle(.white.opacity(0.82))
         }
         .frame(width: diameter, height: diameter)
-        // Keep the generous invisible hit target from the last build. The user
-        // liked the responsiveness; only the visual identification changes here.
         .padding(12)
         .overlay { InstantHoldCapture(changed: changed) }
     }
@@ -114,7 +151,7 @@ struct TouchControls: View {
             Text(label)
                 .font(.system(size: 8, weight: .bold, design: .rounded))
                 .tracking(0.8)
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(.white.opacity(0.58))
         }
         .frame(width: 66, height: 27)
         .padding(9)
@@ -152,11 +189,11 @@ private final class HoldCaptureView: UIView {
         guard !pressed else { return }
         pressed = true
         changed(true)
-        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.12)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.10)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // Intentionally remain held during normal thumb drift.
+        // Keep the input held during normal thumb drift.
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { finishPress() }
@@ -166,7 +203,7 @@ private final class HoldCaptureView: UIView {
         guard pressed else { return }
         pressed = false
         let token = generation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.045) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { [weak self] in
             guard let self, self.generation == token, !self.pressed else { return }
             self.changed(false)
         }
@@ -206,7 +243,7 @@ private final class DPadCaptureView: UIView {
         guard activeTouch == nil, let touch = touches.first else { return }
         activeTouch = touch
         update(touch.location(in: self))
-        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.10)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.08)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -229,13 +266,13 @@ private final class DPadCaptureView: UIView {
         let dx = point.x - bounds.midX
         let dy = point.y - bounds.midY
         let radius = hypot(dx, dy)
-        let deadZone = min(bounds.width, bounds.height) * 0.09
+        let deadZone = min(bounds.width, bounds.height) * 0.08
         guard radius > deadZone else { release(); return }
 
         let angle = atan2(dy, dx)
         let horizontal = abs(cos(angle))
         let vertical = abs(sin(angle))
-        let gate: CGFloat = 0.41
+        let gate: CGFloat = 0.40
         changed(
             dy < 0 && vertical > gate,
             dy > 0 && vertical > gate,
