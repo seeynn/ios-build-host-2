@@ -10,7 +10,6 @@ final class PortGameScene: SKScene {
     private let actorLayer = SKNode()
     private let hudNode = SKSpriteNode()
     private let dialogueNode = SKSpriteNode()
-    private let cinematicBackdropNode = SKSpriteNode(color: .black, size: CGSize(width: 240, height: 520))
     private let cinematicNode = SKSpriteNode()
 
     private var runtime: NativeBridgeRuntime?
@@ -63,13 +62,9 @@ final class PortGameScene: SKScene {
         fieldNode.zPosition = -1000
         addChild(fieldNode)
 
-        cinematicBackdropNode.anchorPoint = CGPoint(x: 0, y: 0)
-        cinematicBackdropNode.position = .zero
-        cinematicBackdropNode.zPosition = -950
-        addChild(cinematicBackdropNode)
-
-        cinematicNode.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-        cinematicNode.position = CGPoint(x: 120, y: portraitHeight / 2)
+        cinematicNode.anchorPoint = CGPoint(x: 0, y: 0)
+        cinematicNode.position = .zero
+        cinematicNode.size = CGSize(width: 240, height: portraitHeight)
         cinematicNode.zPosition = -900
         addChild(cinematicNode)
 
@@ -77,13 +72,13 @@ final class PortGameScene: SKScene {
         addChild(actorLayer)
 
         hudNode.anchorPoint = CGPoint(x: 0, y: 0)
-        hudNode.position = CGPoint(x: 0, y: portraitHeight - 42)
+        hudNode.position = CGPoint(x: 8, y: portraitHeight - 42)
         hudNode.zPosition = 4000
         hudNode.isHidden = true
         addChild(hudNode)
 
         dialogueNode.anchorPoint = CGPoint(x: 0.5, y: 0)
-        dialogueNode.position = CGPoint(x: 120, y: 72)
+        dialogueNode.position = CGPoint(x: 120, y: 78)
         dialogueNode.zPosition = 4100
         dialogueNode.isHidden = true
         addChild(dialogueNode)
@@ -106,8 +101,6 @@ final class PortGameScene: SKScene {
         guard let runtime else { return }
         runtime.runFrame(input: input)
         frameCounter &+= 1
-
-        // Keep input/game logic at 60 Hz. Native presentation work runs at 30 Hz.
         guard frameCounter == 1 || frameCounter % 2 == 0 else { return }
         refreshPresentation(runtime)
     }
@@ -120,8 +113,6 @@ final class PortGameScene: SKScene {
                 return
             }
 
-            // Verify the authored field periodically against the actual finished
-            // hardware frame. If it stops matching, do not keep drawing garbage.
             if frameCounter % 120 == 0, !verifyCurrentField(runtime) {
                 failedFieldChecks += 1
             } else if frameCounter % 120 == 0 {
@@ -138,9 +129,6 @@ final class PortGameScene: SKScene {
             return
         }
 
-        // A mode-0/1 frame is not automatically gameplay. Menus and several
-        // cutscenes use the same GBA display modes. Only switch to the tall field
-        // after a ROM-authored 1024x1024 scene has actually matched the live frame.
         if runtime.isLikelyFieldFrame(), frameCounter % 6 == 0,
            resolveVerifiedField(runtime) {
             fieldPresentationActive = true
@@ -154,8 +142,6 @@ final class PortGameScene: SKScene {
     private func showField(_ runtime: NativeBridgeRuntime) {
         fieldNode.isHidden = false
         actorLayer.isHidden = false
-        hudNode.isHidden = false
-        cinematicBackdropNode.isHidden = true
         cinematicNode.isHidden = true
 
         updateFieldCamera(runtime)
@@ -200,8 +186,6 @@ final class PortGameScene: SKScene {
         let active = runtime.activeSceneDescriptorOffset(candidates: sceneDescriptors)
         if let active {
             appendUnique(active)
-            // Nearby descriptors tend to belong to neighboring field objects. The
-            // RAM scan is a hint, never authority, so validate its neighborhood too.
             for descriptor in sceneDescriptors
                 .sorted(by: { abs($0 - active) < abs($1 - active) })
                 .prefix(10) {
@@ -317,8 +301,6 @@ final class PortGameScene: SKScene {
             var total: Int64 = 0
             var samples: Int64 = 0
 
-            // Ignore the original HUD band, likely dialogue band and the center
-            // actor area. What remains is overwhelmingly background terrain.
             for sy in Swift.stride(from: 34, to: 142, by: sampleStride) {
                 for sx in Swift.stride(from: 5, to: 235, by: sampleStride) {
                     if sx >= 82 && sx <= 158 && sy >= 48 && sy <= 132 { continue }
@@ -348,8 +330,6 @@ final class PortGameScene: SKScene {
             }
         }
 
-        // Save files can resume far away from a scene's authored spawn. If the
-        // local estimate is poor, perform one cheap whole-map pass, then refine.
         if allowGlobalSearch && bestScore > fieldAcceptScore {
             for y in Swift.stride(from: 0, through: maxY, by: 48) {
                 for x in Swift.stride(from: 0, through: maxX, by: 48) {
@@ -381,8 +361,6 @@ final class PortGameScene: SKScene {
         }
         lastScroll = scroll
 
-        // Re-lock against the finished hardware frame often enough to correct any
-        // parallax/scroll-register ambiguity without causing visible snapping.
         if frameCounter % 18 == 0,
            let scene = currentScene,
            let image = currentSceneImage,
@@ -436,7 +414,6 @@ final class PortGameScene: SKScene {
     private func refreshActors(_ runtime: NativeBridgeRuntime) {
         actorLayer.removeAllChildren()
         for sprite in runtime.spriteFrames() {
-            // Original HUD sprites occupy the top band; UI is composited separately.
             if sprite.screenY >= 0 && sprite.screenY < 30 { continue }
             if sprite.screenY < -40 || sprite.screenY > 188 { continue }
 
@@ -523,91 +500,236 @@ final class PortGameScene: SKScene {
         return stats.darkRatio > 0.50 && stats.brightRatio > 0.024 ? fallback : nil
     }
 
-    // MARK: - Menus / title / cutscenes
+    // MARK: - Portrait menus / splashes / cutscenes
+
+    private enum PortraitFrameKind {
+        case whiteSplash
+        case purpleTitle
+        case purpleMenu
+        case darkCutscene
+        case generic
+    }
 
     private func showCinematic(_ runtime: NativeBridgeRuntime) {
         fieldNode.isHidden = true
         actorLayer.isHidden = true
         hudNode.isHidden = true
         dialogueNode.isHidden = true
-        cinematicBackdropNode.isHidden = false
         cinematicNode.isHidden = false
 
-        guard let frame = runtime.framebufferImage() else { return }
-        cinematicBackdropNode.color = sampledBackdropColor(frame)
-        cinematicBackdropNode.colorBlendFactor = 1
-        cinematicBackdropNode.texture = nil
-        cinematicBackdropNode.size = CGSize(width: 240, height: portraitHeight)
-
-        let crop: CGImage
-        if isMostlyDark(frame), let bounds = visibleContentBounds(frame),
-           let content = frame.cropping(to: bounds) {
-            crop = content
-        } else {
-            crop = frame
-        }
-
-        let texture = SKTexture(cgImage: crop)
+        guard let frame = runtime.framebufferImage(),
+              let portrait = makePortraitPresentation(from: frame) else { return }
+        let texture = SKTexture(cgImage: portrait)
         texture.filteringMode = .nearest
         cinematicNode.texture = texture
-        cinematicNode.alpha = 1
+        cinematicNode.size = CGSize(width: 240, height: portraitHeight)
+    }
 
-        let aspect = CGFloat(crop.width) / CGFloat(max(crop.height, 1))
-        let maxWidth: CGFloat = 232
-        let maxHeight: CGFloat = isMostlyDark(frame) ? 250 : 176
-        var targetWidth = maxWidth
-        var targetHeight = targetWidth / max(aspect, 0.01)
-        if targetHeight > maxHeight {
-            targetHeight = maxHeight
-            targetWidth = targetHeight * aspect
+    private func makePortraitPresentation(from frame: CGImage) -> CGImage? {
+        guard let source = rgbaPixels(frame) else { return nil }
+        let kind = classifyFrame(source, width: frame.width, height: frame.height)
+        var output = [UInt8](repeating: 0, count: 240 * portraitHeight * 4)
+
+        switch kind {
+        case .whiteSplash:
+            fill(&output, color: (248, 248, 248))
+            let bounds = nonWhiteContentBounds(source, width: 240, height: 160) ?? (20, 35, 200, 90)
+            let target = fittedRect(sourceW: bounds.w, sourceH: bounds.h, maxW: 206, maxH: 150, centerX: 120, centerY: 250)
+            blitNearest(source, sourceWidth: 240, sourceHeight: 160, sourceRect: bounds, into: &output, destinationWidth: 240, destinationHeight: portraitHeight, destinationRect: target)
+
+        case .purpleTitle:
+            let bg = cornerAverage(source, width: 240, height: 160, darken: 0.78)
+            fillVerticalGradient(&output, top: darkened(bg, factor: 0.60), bottom: bg)
+            // Logo and menu become two intentionally placed portrait elements.
+            blitNearest(source, sourceWidth: 240, sourceHeight: 160, sourceRect: (0, 8, 240, 104), into: &output, destinationWidth: 240, destinationHeight: portraitHeight, destinationRect: (5, 96, 230, 100))
+            blitNearest(source, sourceWidth: 240, sourceHeight: 160, sourceRect: (34, 91, 172, 68), into: &output, destinationWidth: 240, destinationHeight: portraitHeight, destinationRect: (27, 260, 186, 74))
+
+        case .purpleMenu:
+            let bg = cornerAverage(source, width: 240, height: 160, darken: 0.80)
+            fillVerticalGradient(&output, top: darkened(bg, factor: 0.62), bottom: bg)
+            // Reflow the GBA's four compressed rows down the portrait screen.
+            blitNearest(source, sourceWidth: 240, sourceHeight: 160, sourceRect: (0, 0, 240, 31), into: &output, destinationWidth: 240, destinationHeight: portraitHeight, destinationRect: (7, 62, 226, 29))
+            let sourceRows = [(0, 29, 240, 32), (0, 61, 240, 32), (0, 93, 240, 32), (0, 125, 240, 34)]
+            let destinationY = [128, 198, 268, 338]
+            for (index, row) in sourceRows.enumerated() {
+                blitNearest(source, sourceWidth: 240, sourceHeight: 160, sourceRect: row, into: &output, destinationWidth: 240, destinationHeight: portraitHeight, destinationRect: (8, destinationY[index], 224, 31))
+            }
+
+        case .darkCutscene:
+            fill(&output, color: (0, 0, 0))
+            let bounds = visibleContentBounds(source, width: 240, height: 160) ?? (0, 0, 240, 160)
+            let target = fittedRect(sourceW: bounds.w, sourceH: bounds.h, maxW: 228, maxH: 250, centerX: 120, centerY: 245)
+            blitNearest(source, sourceWidth: 240, sourceHeight: 160, sourceRect: bounds, into: &output, destinationWidth: 240, destinationHeight: portraitHeight, destinationRect: target)
+
+        case .generic:
+            let bg = cornerAverage(source, width: 240, height: 160, darken: 0.70)
+            fillVerticalGradient(&output, top: darkened(bg, factor: 0.55), bottom: bg)
+            let target = fittedRect(sourceW: 240, sourceH: 160, maxW: 232, maxH: 180, centerX: 120, centerY: 245)
+            blitNearest(source, sourceWidth: 240, sourceHeight: 160, sourceRect: (0, 0, 240, 160), into: &output, destinationWidth: 240, destinationHeight: portraitHeight, destinationRect: target)
         }
-        cinematicNode.size = CGSize(width: targetWidth, height: targetHeight)
-        cinematicNode.position = CGPoint(x: 120, y: 282)
+
+        return makeRGBAImage(output, width: 240, height: portraitHeight)
     }
 
-    private func isMostlyDark(_ image: CGImage) -> Bool {
-        let stats = pixelStats(image, rect: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        return stats.darkRatio > 0.58
+    private func classifyFrame(_ pixels: [UInt8], width: Int, height: Int) -> PortraitFrameKind {
+        var white = 0, dark = 0, purple = 0, red = 0, yellow = 0, samples = 0
+        for y in Swift.stride(from: 0, to: height, by: 2) {
+            for x in Swift.stride(from: 0, to: width, by: 2) {
+                let i = (y * width + x) * 4
+                let r = Int(pixels[i]), g = Int(pixels[i + 1]), b = Int(pixels[i + 2])
+                let maxC = max(r, max(g, b)), minC = min(r, min(g, b))
+                if r > 225 && g > 225 && b > 225 { white += 1 }
+                if r + g + b < 120 { dark += 1 }
+                if r > 55 && b > 70 && b > g * 5 / 4 && r > g { purple += 1 }
+                if r > 145 && r > g * 3 / 2 && r > b * 3 / 2 { red += 1 }
+                if r > 170 && g > 135 && b < 95 && maxC - minC > 80 { yellow += 1 }
+                samples += 1
+            }
+        }
+        let count = Double(max(samples, 1))
+        let whiteRatio = Double(white) / count
+        let darkRatio = Double(dark) / count
+        let purpleRatio = Double(purple) / count
+        let redRatio = Double(red) / count
+        let yellowRatio = Double(yellow) / count
+
+        if whiteRatio > 0.46 { return .whiteSplash }
+        if purpleRatio > 0.20 && redRatio > 0.028 && yellowRatio > 0.012 { return .purpleTitle }
+        if purpleRatio > 0.22 { return .purpleMenu }
+        if darkRatio > 0.56 { return .darkCutscene }
+        return .generic
     }
 
-    private func visibleContentBounds(_ image: CGImage) -> CGRect? {
-        guard let pixels = rgbaPixels(image) else { return nil }
-        let width = image.width, height = image.height
+    private func fittedRect(
+        sourceW: Int,
+        sourceH: Int,
+        maxW: Int,
+        maxH: Int,
+        centerX: Int,
+        centerY: Int
+    ) -> (x: Int, y: Int, w: Int, h: Int) {
+        let scale = min(Double(maxW) / Double(max(sourceW, 1)), Double(maxH) / Double(max(sourceH, 1)))
+        let w = max(1, Int(Double(sourceW) * scale))
+        let h = max(1, Int(Double(sourceH) * scale))
+        return (centerX - w / 2, centerY - h / 2, w, h)
+    }
+
+    private func nonWhiteContentBounds(_ pixels: [UInt8], width: Int, height: Int) -> (x: Int, y: Int, w: Int, h: Int)? {
         var minX = width, minY = height, maxX = -1, maxY = -1
         for y in 0..<height {
             for x in 0..<width {
                 let i = (y * width + x) * 4
-                let sum = Int(pixels[i]) + Int(pixels[i + 1]) + Int(pixels[i + 2])
-                if sum < 54 { continue }
+                let r = Int(pixels[i]), g = Int(pixels[i + 1]), b = Int(pixels[i + 2])
+                if r > 232 && g > 232 && b > 232 { continue }
                 minX = min(minX, x); minY = min(minY, y)
                 maxX = max(maxX, x); maxY = max(maxY, y)
             }
         }
         guard maxX >= minX, maxY >= minY else { return nil }
-        let pad = 6
+        let pad = 5
         let x = max(0, minX - pad), y = max(0, minY - pad)
         let right = min(width, maxX + pad + 1), bottom = min(height, maxY + pad + 1)
-        return CGRect(x: x, y: y, width: right - x, height: bottom - y)
+        return (x, y, right - x, bottom - y)
     }
 
-    private func sampledBackdropColor(_ image: CGImage) -> SKColor {
-        guard let pixels = rgbaPixels(image) else { return .black }
-        let points = [
-            (4, 4), (image.width - 5, 4),
-            (4, image.height - 5), (image.width - 5, image.height - 5)
-        ]
+    private func visibleContentBounds(_ pixels: [UInt8], width: Int, height: Int) -> (x: Int, y: Int, w: Int, h: Int)? {
+        var minX = width, minY = height, maxX = -1, maxY = -1
+        for y in 0..<height {
+            for x in 0..<width {
+                let i = (y * width + x) * 4
+                let sum = Int(pixels[i]) + Int(pixels[i + 1]) + Int(pixels[i + 2])
+                if sum < 48 { continue }
+                minX = min(minX, x); minY = min(minY, y)
+                maxX = max(maxX, x); maxY = max(maxY, y)
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return nil }
+        let pad = 5
+        let x = max(0, minX - pad), y = max(0, minY - pad)
+        let right = min(width, maxX + pad + 1), bottom = min(height, maxY + pad + 1)
+        return (x, y, right - x, bottom - y)
+    }
+
+    private func cornerAverage(
+        _ pixels: [UInt8],
+        width: Int,
+        height: Int,
+        darken: Double
+    ) -> (UInt8, UInt8, UInt8) {
+        let points = [(4, 4), (width - 5, 4), (4, height - 5), (width - 5, height - 5)]
         var r = 0, g = 0, b = 0
         for (x, y) in points {
-            let i = (y * image.width + x) * 4
+            let i = (y * width + x) * 4
             r += Int(pixels[i]); g += Int(pixels[i + 1]); b += Int(pixels[i + 2])
         }
-        let count: CGFloat = CGFloat(points.count * 255)
-        return SKColor(
-            red: CGFloat(r) / count * 0.72,
-            green: CGFloat(g) / count * 0.72,
-            blue: CGFloat(b) / count * 0.72,
-            alpha: 1
+        return (
+            UInt8(max(0, min(255, Int(Double(r / points.count) * darken)))),
+            UInt8(max(0, min(255, Int(Double(g / points.count) * darken)))),
+            UInt8(max(0, min(255, Int(Double(b / points.count) * darken))))
         )
+    }
+
+    private func darkened(_ color: (UInt8, UInt8, UInt8), factor: Double) -> (UInt8, UInt8, UInt8) {
+        (
+            UInt8(Double(color.0) * factor),
+            UInt8(Double(color.1) * factor),
+            UInt8(Double(color.2) * factor)
+        )
+    }
+
+    private func fill(_ pixels: inout [UInt8], color: (UInt8, UInt8, UInt8)) {
+        for p in 0..<(pixels.count / 4) {
+            let i = p * 4
+            pixels[i] = color.0; pixels[i + 1] = color.1; pixels[i + 2] = color.2; pixels[i + 3] = 255
+        }
+    }
+
+    private func fillVerticalGradient(
+        _ pixels: inout [UInt8],
+        top: (UInt8, UInt8, UInt8),
+        bottom: (UInt8, UInt8, UInt8)
+    ) {
+        for y in 0..<portraitHeight {
+            let t = Double(y) / Double(max(1, portraitHeight - 1))
+            let r = UInt8(Double(top.0) * (1 - t) + Double(bottom.0) * t)
+            let g = UInt8(Double(top.1) * (1 - t) + Double(bottom.1) * t)
+            let b = UInt8(Double(top.2) * (1 - t) + Double(bottom.2) * t)
+            for x in 0..<240 {
+                let i = (y * 240 + x) * 4
+                pixels[i] = r; pixels[i + 1] = g; pixels[i + 2] = b; pixels[i + 3] = 255
+            }
+        }
+    }
+
+    private func blitNearest(
+        _ source: [UInt8],
+        sourceWidth: Int,
+        sourceHeight: Int,
+        sourceRect: (x: Int, y: Int, w: Int, h: Int),
+        into destination: inout [UInt8],
+        destinationWidth: Int,
+        destinationHeight: Int,
+        destinationRect: (x: Int, y: Int, w: Int, h: Int)
+    ) {
+        guard sourceRect.w > 0, sourceRect.h > 0, destinationRect.w > 0, destinationRect.h > 0 else { return }
+        for dy in 0..<destinationRect.h {
+            let y = destinationRect.y + dy
+            guard y >= 0 && y < destinationHeight else { continue }
+            let sy = sourceRect.y + min(sourceRect.h - 1, dy * sourceRect.h / destinationRect.h)
+            guard sy >= 0 && sy < sourceHeight else { continue }
+            for dx in 0..<destinationRect.w {
+                let x = destinationRect.x + dx
+                guard x >= 0 && x < destinationWidth else { continue }
+                let sx = sourceRect.x + min(sourceRect.w - 1, dx * sourceRect.w / destinationRect.w)
+                guard sx >= 0 && sx < sourceWidth else { continue }
+                let si = (sy * sourceWidth + sx) * 4
+                let di = (y * destinationWidth + x) * 4
+                destination[di] = source[si]
+                destination[di + 1] = source[si + 1]
+                destination[di + 2] = source[si + 2]
+                destination[di + 3] = 255
+            }
+        }
     }
 
     // MARK: - Pixel helpers
@@ -647,6 +769,23 @@ final class PortGameScene: SKScene {
         context.scaleBy(x: 1, y: -1)
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return pixels
+    }
+
+    private func makeRGBAImage(_ pixels: [UInt8], width: Int, height: Int) -> CGImage? {
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
+        return CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )
     }
 
     private func wrappedDelta(from old: Int, to new: Int, modulus: Int) -> Int {
