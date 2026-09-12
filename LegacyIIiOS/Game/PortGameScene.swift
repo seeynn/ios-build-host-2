@@ -79,9 +79,8 @@ final class PortGameScene: SKScene {
         runtime.runFrame(input: input)
         frameCounter &+= 1
 
-        // Keep the original game logic/input at 60 Hz while rebuilding the native
-        // portrait presentation at 30 Hz. This leaves enough headroom for iPhone GPUs
-        // without changing cartridge timing.
+        // Cartridge timing and input remain 60 Hz. Rebuild the heavier native
+        // portrait presentation at 30 Hz so gameplay timing is never slowed down.
         if frameCounter == 1 || frameCounter % 2 == 0 {
             refreshPresentation(runtime)
         }
@@ -99,10 +98,10 @@ final class PortGameScene: SKScene {
         refreshOriginalUI(runtime)
     }
 
-    /// The GBA engine maintains a rolling hardware tilemap rather than all 520 rows
-    /// required by the portrait viewport. Rows outside the hardware working set can
-    /// therefore be an empty backdrop. Never expose those empty rows as giant black
-    /// bars: extend the nearest valid authored row until live map data becomes valid.
+    /// The original engine streams a rolling tilemap around a 240x160 hardware
+    /// viewport. The extra portrait rows can temporarily expose unpopulated rows.
+    /// Replace only those empty rows with the nearest valid authored row instead of
+    /// exposing full-width black bands to the player.
     private func repairPortraitBackground(_ image: CGImage) -> CGImage? {
         guard image.width == 240,
               image.height == portraitHeight,
@@ -116,8 +115,9 @@ final class PortGameScene: SKScene {
         let bytesPerPixel = 4
         let bytesPerRow = width * bytesPerPixel
         var rgba = [UInt8](repeating: 0, count: bytesPerRow * height)
+        let byteCount = rgba.count
         rgba.withUnsafeMutableBytes { destination in
-            destination.copyBytes(from: UnsafeRawBufferPointer(start: source, count: rgba.count))
+            destination.copyBytes(from: UnsafeRawBufferPointer(start: source, count: byteCount))
         }
 
         let centerStart = verticalExtension
@@ -146,19 +146,21 @@ final class PortGameScene: SKScene {
         func copyRow(from sourceY: Int, to destinationY: Int) {
             let sourceStart = sourceY * bytesPerRow
             let destinationStart = destinationY * bytesPerRow
+            let rowCopy = Array(rgba[sourceStart..<(sourceStart + bytesPerRow)])
             rgba.replaceSubrange(
                 destinationStart..<(destinationStart + bytesPerRow),
-                with: rgba[sourceStart..<(sourceStart + bytesPerRow)]
+                with: rowCopy
             )
         }
 
-        // Walk outward from the known-valid 240x160 hardware viewport. Empty rolling-
-        // map rows inherit the closest valid authored row instead of becoming a band.
+        // Repair upwards from the known-live hardware viewport.
         if centerStart > 0 {
             for y in stride(from: centerStart - 1, through: 0, by: -1) {
                 if rowLooksEmpty(y) { copyRow(from: y + 1, to: y) }
             }
         }
+
+        // Repair downwards from the known-live hardware viewport.
         if centerEnd < height {
             for y in centerEnd..<height {
                 if rowLooksEmpty(y) { copyRow(from: y - 1, to: y) }
@@ -172,16 +174,18 @@ final class PortGameScene: SKScene {
         actorLayer.removeAllChildren()
 
         for sprite in runtime.spriteFrames() {
-            // Everything inside the original 240x160 viewport is rendered by the
-            // cartridge itself and its UI/effects are restored below. Only retain
-            // genuine off-screen OAM objects for the portrait extension so the player
-            // and enemies are never double-drawn.
-            if sprite.screenY >= 0 && sprite.screenY < originalViewportHeight { continue }
+            // The original HUD uses OAM at the top of the 160px hardware viewport.
+            // Suppress only those HUD objects; keep the player/NPC/enemy OAM visible.
+            if sprite.screenY >= 0 && sprite.screenY < 38 { continue }
 
             let targetTopY = sprite.screenY + verticalExtension
             let centerX = CGFloat(sprite.screenX) + CGFloat(sprite.width) * 0.5
             let centerYFromTop = CGFloat(targetTopY) + CGFloat(sprite.height) * 0.5
             let spriteKitY = CGFloat(portraitHeight) - centerYFromTop
+
+            if centerYFromTop + CGFloat(sprite.height) < 0 || centerYFromTop > CGFloat(portraitHeight) {
+                continue
+            }
 
             let texture = SKTexture(cgImage: sprite.image)
             texture.filteringMode = .nearest
@@ -192,10 +196,8 @@ final class PortGameScene: SKScene {
         }
     }
 
-    /// Keep cartridge-native UI legible while the world itself is rendered natively.
-    /// The HUD is moved to the true top of the phone. Dialogue is shown only when the
-    /// lower framebuffer strongly resembles a text/menu panel, so normal gameplay is
-    /// not covered by a 240x160 emulator rectangle.
+    /// Restore cartridge-native UI/text on top of the native tall world. The old
+    /// emulator viewport never becomes visible: only the UI strips are cropped.
     private func refreshOriginalUI(_ runtime: NativeBridgeRuntime) {
         guard let frame = runtime.framebufferImage() else { return }
 
@@ -238,7 +240,6 @@ final class PortGameScene: SKScene {
         for y in startY..<originalViewportHeight {
             for x in stride(from: 0, to: 240, by: 2) {
                 let offset = y * rowBytes + x * pixelStride
-                // Channel order is irrelevant for luminance-like thresholding.
                 let c0 = Int(bytes[offset])
                 let c1 = Int(bytes[offset + 1])
                 let c2 = Int(bytes[offset + 2])
@@ -255,8 +256,7 @@ final class PortGameScene: SKScene {
     }
 
     private func crop(_ image: CGImage, x: Int, y: Int, width: Int, height: Int) -> CGImage? {
-        let rect = CGRect(x: x, y: y, width: width, height: height)
-        return image.cropping(to: rect)
+        image.cropping(to: CGRect(x: x, y: y, width: width, height: height))
     }
 
     private func makeRGBAImage(_ rgba: [UInt8], width: Int, height: Int) -> CGImage? {
