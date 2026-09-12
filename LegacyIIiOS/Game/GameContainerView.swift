@@ -16,11 +16,17 @@ struct GameContainerView: View {
     var body: some View {
         ZStack {
             SpriteView(scene: scene, options: [.ignoresSiblingOrder])
-                .ignoresSafeArea()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(.all)
                 .background(.black)
+
             TouchControls(scene: scene)
+                .ignoresSafeArea(.all)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea(.all)
         .background(.black)
+        .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
     }
 }
