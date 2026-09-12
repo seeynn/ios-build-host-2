@@ -23,13 +23,7 @@ final class NativeBridgeRuntime {
         let index: Int
         let priority: Int
         let charBase: UInt32
-        let screenBase: UInt32
         let is8bpp: Bool
-        let width: Int
-        let height: Int
-        let hOffset: Int
-        let vOffset: Int
-        let sizeCode: Int
     }
 
     private let bridge = EmulatorBridge()
@@ -38,6 +32,17 @@ final class NativeBridgeRuntime {
     private var audioSamples: UnsafeMutableBufferPointer<Int16>
     private var keys: UInt32 = 0
     private var started = false
+    private var romImage: ROMImage?
+
+    // Webfoot's live field-layer objects cache four decoded 32x32-tile chunks.
+    // The resource pointer at +0x10 identifies the authored layer and the owner
+    // bytes at +0x24 say which chunks are resident in the four 0x800-byte slots.
+    // Adjacent portrait rows can therefore be read from the real authored chunk
+    // descriptors instead of wrapping the GBA's 512px hardware tilemap ring.
+    private let alfpFieldResourceVtable: UInt32 = 0x080056F9
+    private let fieldChunkBytes = 0x800
+    private var fieldObjects = [UInt32](repeating: 0, count: 4)
+    private var decodedFieldChunks: [UInt32: Data] = [:]
 
     private let sampleRate = 32_768.0
     private let sampleCount = 1024
@@ -80,6 +85,10 @@ final class NativeBridgeRuntime {
     func start(romURL: URL, saveURL: URL) throws {
         let romPath = filePath(romURL)
         let savePath = filePath(saveURL)
+        romImage = try ROMImage(data: Data(contentsOf: romURL, options: .mappedIfSafe))
+        fieldObjects = [UInt32](repeating: 0, count: 4)
+        decodedFieldChunks.removeAll(keepingCapacity: true)
+
         core.pointee.opts.savegamePath = strdup(savePath)
         guard mCoreLoadFile(core, romPath) else { throw RuntimeError.romLoadFailed }
         _ = mCoreLoadSaveFile(core, savePath, false)
@@ -97,6 +106,8 @@ final class NativeBridgeRuntime {
     func reset() {
         guard started else { return }
         core.pointee.reset(core)
+        fieldObjects = [UInt32](repeating: 0, count: 4)
+        decodedFieldChunks.removeAll(keepingCapacity: true)
         bridge.resetAudioQueue()
     }
 
@@ -106,32 +117,20 @@ final class NativeBridgeRuntime {
 
     func backgroundOffsets() -> [BackgroundOffset] {
         let dispcnt = read16(0x0400_0000)
-        let mode = Int(dispcnt & 0x7)
-        guard mode == 0 || mode == 1 else { return [] }
-        let maxRegularBG = mode == 0 ? 3 : 1
-        return (0...maxRegularBG).compactMap { bg in
+        guard Int(dispcnt & 0x7) == 0 else { return [] }
+        return (0...3).compactMap { bg in
             let enabled = (dispcnt & (UInt16(1) << UInt16(8 + bg))) != 0
             guard enabled else { return nil }
-            return BackgroundOffset(
-                index: bg,
-                x: Int(read16(0x0400_0010 + UInt32(bg * 4)) & 0x01FF),
-                y: Int(read16(0x0400_0012 + UInt32(bg * 4)) & 0x01FF)
-            )
+            let object = fieldObjects[bg]
+            let resource = object == 0 ? 0 : read32(object + 0x10)
+            let resolved = resolvedScroll(bg: bg, object: object, resource: resource)
+            return BackgroundOffset(index: bg, x: resolved.x, y: resolved.y)
         }
     }
 
-    /// Field screens are bright, tile-backed mode-0/1 scenes with at least one
-    /// normal actor-sized OAM object. Title cards, legal screens and the small
-    /// opening cutscenes fail one of these checks and are presented cinematically.
     func isLikelyFieldFrame() -> Bool {
-        let mode = displayMode()
-        guard mode == 0 || mode == 1, framebufferNonDarkRatio() > 0.52 else { return false }
-        return spriteFrames().contains { sprite in
-            sprite.width >= 8 && sprite.width <= 48 &&
-            sprite.height >= 16 && sprite.height <= 48 &&
-            sprite.screenX > -24 && sprite.screenX < 232 &&
-            sprite.screenY >= 18 && sprite.screenY < 154
-        }
+        guard displayMode() == 0 else { return false }
+        return resolveFieldObjects() >= 3
     }
 
     func playerSpriteCandidate() -> SpriteFrame? {
@@ -153,177 +152,231 @@ final class NativeBridgeRuntime {
             }
     }
 
-    /// The game keeps current resource pointers in work RAM. Looking for one of
-    /// the catalogued scene descriptors gives the portrait renderer a practical
-    /// live map identity without hard-coding story order.
-    func activeSceneDescriptorOffset(candidates: [Int]) -> Int? {
-        guard !candidates.isEmpty else { return nil }
-        let pointers = Set(candidates.map { UInt32(0x0800_0000 + $0) })
-        var hits: [UInt32: Int] = [:]
+    // MARK: - Authored portrait field
 
-        func scan(_ start: UInt32, _ byteCount: Int) {
-            var address = start
-            let end = start + UInt32(byteCount)
-            while address + 3 < end {
-                let value = read32(address)
-                if pointers.contains(value) { hits[value, default: 0] += 1 }
-                address += 4
-            }
-        }
+    /// Builds a true 240x520 field view from the live Webfoot field resources.
+    /// Nothing is repeated, clamped, guessed or stretched. The 160px hardware
+    /// view remains the center of the camera and the extra 180px above/below are
+    /// read from adjacent authored chunks. Tile graphics and RGB555 colours come
+    /// from the live VRAM/palette state, so animation and palette changes remain
+    /// exactly the game's own.
+    func authoredPortraitBackgroundImage(height portraitHeight: Int = 520) -> CGImage? {
+        guard portraitHeight >= 160,
+              displayMode() == 0,
+              resolveFieldObjects() >= 3 else { return nil }
 
-        scan(0x0200_0000, 0x40000)
-        scan(0x0300_0000, 0x8000)
-
-        guard let best = hits.max(by: { $0.value < $1.value })?.key else { return nil }
-        return Int(best - 0x0800_0000)
-    }
-
-    func colorizedSceneImage(_ scene: ALFPSceneData.IndexedScene) -> CGImage? {
-        var rgba = [UInt8](repeating: 0, count: scene.width * scene.height * 4)
-        for (pixel, paletteIndex) in scene.pixels.enumerated() {
-            let color = read16(0x0500_0000 + UInt32(Int(paletteIndex) * 2))
-            writeBGR555(color, into: &rgba, at: pixel * 4, alpha: 255)
-        }
-        return makeRGBAImage(rgba, width: scene.width, height: scene.height)
-    }
-
-    /// A deliberate portrait treatment for title/legal/cutscene frames. It fills
-    /// the complete 240x520 canvas with an ambient version of the current frame,
-    /// then enlarges the authored content. This replaces the old tiny 240x160 box
-    /// and prevents duplicated HUD/text strips from appearing above/below it.
-    func cinematicPortraitImage(height portraitHeight: Int = 520) -> CGImage? {
-        guard let source = framebufferRGBA() else { return nil }
-        let sourceWidth = 240
-        let sourceHeight = 160
-        var output = [UInt8](repeating: 0, count: sourceWidth * portraitHeight * 4)
-
-        // Full-height ambient backdrop. Keep it dark so the sharp foreground frame
-        // reads as intentional rather than as a stretched emulator screen.
-        for y in 0..<portraitHeight {
-            let sy = min(sourceHeight - 1, y * sourceHeight / portraitHeight)
-            for x in 0..<sourceWidth {
-                let src = (sy * sourceWidth + x) * 4
-                let dst = (y * sourceWidth + x) * 4
-                output[dst] = UInt8(Int(source[src]) * 34 / 100)
-                output[dst + 1] = UInt8(Int(source[src + 1]) * 34 / 100)
-                output[dst + 2] = UInt8(Int(source[src + 2]) * 34 / 100)
-                output[dst + 3] = 255
-            }
-        }
-
-        let bounds = visibleContentBounds(source, width: sourceWidth, height: sourceHeight)
-        let darkRatio = 1.0 - framebufferNonDarkRatio()
-        let foregroundRect: (x: Int, y: Int, w: Int, h: Int)
-        let targetRect: (x: Int, y: Int, w: Int, h: Int)
-
-        if darkRatio > 0.58, let bounds {
-            let pad = 6
-            let x = max(0, bounds.x - pad)
-            let y = max(0, bounds.y - pad)
-            let w = min(sourceWidth - x, bounds.w + pad * 2)
-            let h = min(sourceHeight - y, bounds.h + pad * 2)
-            foregroundRect = (x, y, max(1, w), max(1, h))
-
-            let uniform = min(224.0 / Double(max(w, 1)), 300.0 / Double(max(h, 1)))
-            var tw = max(1, Int(Double(w) * uniform))
-            var th = max(1, Int(Double(h) * uniform))
-            // Very wide old-GBA cutscene plates looked tiny on a Pro Max. Give
-            // them a portrait-aware minimum height while preserving their width.
-            if Double(w) / Double(max(h, 1)) > 2.4 {
-                tw = min(232, max(tw, 220))
-                th = max(th, 132)
-            }
-            targetRect = ((240 - tw) / 2, (portraitHeight - th) / 2, tw, th)
-        } else {
-            foregroundRect = (0, 0, sourceWidth, sourceHeight)
-            // Full-frame title/menu/legal art gets a larger 240x224 presentation
-            // rather than being left as a tiny 160px-high Game Boy rectangle.
-            targetRect = (0, (portraitHeight - 224) / 2, 240, 224)
-        }
-
-        blitNearest(
-            source,
-            sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight,
-            sourceRect: foregroundRect,
-            into: &output,
-            destinationWidth: sourceWidth,
-            destinationHeight: portraitHeight,
-            destinationRect: targetRect
-        )
-        return makeRGBAImage(output, width: sourceWidth, height: portraitHeight)
-    }
-
-    /// Reconstruct the live GBA regular backgrounds into a portrait canvas. This
-    /// remains a fallback for field scenes whose authored descriptor is not yet
-    /// resolved; the main field path uses full ROM scene data instead.
-    func portraitBackgroundImage(height portraitHeight: Int = 520) -> CGImage? {
         let dispcnt = read16(0x0400_0000)
-        let mode = Int(dispcnt & 0x7)
-        guard mode == 0 || mode == 1 else {
-            return cinematicPortraitImage(height: portraitHeight)
-        }
-
         var backgrounds: [RegularBG] = []
-        let maxRegularBG = mode == 0 ? 3 : 1
-        for bg in 0...maxRegularBG {
-            let enabled = (dispcnt & (UInt16(1) << UInt16(8 + bg))) != 0
-            guard enabled else { continue }
+        for bg in 0...3 {
+            guard fieldObjects[bg] != 0,
+                  (dispcnt & (UInt16(1) << UInt16(8 + bg))) != 0 else { continue }
             let cnt = read16(0x0400_0008 + UInt32(bg * 2))
-            let sizeCode = Int((cnt >> 14) & 0x3)
-            let dimensions: (Int, Int)
-            switch sizeCode {
-            case 0: dimensions = (256, 256)
-            case 1: dimensions = (512, 256)
-            case 2: dimensions = (256, 512)
-            default: dimensions = (512, 512)
-            }
             backgrounds.append(RegularBG(
                 index: bg,
                 priority: Int(cnt & 0x3),
                 charBase: 0x0600_0000 + UInt32((cnt >> 2) & 0x3) * 0x4000,
-                screenBase: 0x0600_0000 + UInt32((cnt >> 8) & 0x1F) * 0x800,
-                is8bpp: (cnt & 0x0080) != 0,
-                width: dimensions.0,
-                height: dimensions.1,
-                hOffset: Int(read16(0x0400_0010 + UInt32(bg * 4)) & 0x01FF),
-                vOffset: Int(read16(0x0400_0012 + UInt32(bg * 4)) & 0x01FF),
-                sizeCode: sizeCode
+                is8bpp: (cnt & 0x0080) != 0
             ))
         }
+        guard backgrounds.count >= 3 else { return nil }
 
-        guard !backgrounds.isEmpty else { return cinematicPortraitImage(height: portraitHeight) }
+        // Back to front. Lower BG number wins ties on hardware.
         backgrounds.sort {
             if $0.priority != $1.priority { return $0.priority > $1.priority }
             return $0.index > $1.index
         }
 
-        var rgba = [UInt8](repeating: 0, count: 240 * portraitHeight * 4)
+        var scroll: [Int: (x: Int, y: Int)] = [:]
+        for bg in backgrounds {
+            let object = fieldObjects[bg.index]
+            let resource = read32(object + 0x10)
+            scroll[bg.index] = resolvedScroll(bg: bg.index, object: object, resource: resource)
+        }
+
+        let extensionY = (portraitHeight - 160) / 2
         let backdrop = read16(0x0500_0000)
-        let verticalExtension = (portraitHeight - 160) / 2
+        var rgba = [UInt8](repeating: 0, count: 240 * portraitHeight * 4)
 
         for y in 0..<portraitHeight {
+            let hardwareY = y - extensionY
             for x in 0..<240 {
                 let out = (y * 240 + x) * 4
-                writeBGR555(backdrop, into: &rgba, at: out, alpha: 255)
-                let relativeScreenY = y - verticalExtension
+                writeRGB555(backdrop, into: &rgba, at: out, alpha: 255)
+
                 for bg in backgrounds {
-                    let rawX = bg.hOffset + x
-                    let rawY = bg.vOffset + relativeScreenY
-                    // Never modulo-wrap the extra portrait rows. Hardware wrap is
-                    // correct for 160px GBA output but produced the repeated bands
-                    // seen on iPhone. Clamp to the streamed tilemap edge instead.
-                    let mapX = min(max(rawX, 0), bg.width - 1)
-                    let mapY = min(max(rawY, 0), bg.height - 1)
-                    guard let paletteIndex = regularBGPaletteIndex(bg, mapX: mapX, mapY: mapY), paletteIndex != 0 else { continue }
+                    guard let bgScroll = scroll[bg.index] else { continue }
+                    let worldX = bgScroll.x + x
+                    let worldY = bgScroll.y + hardwareY
+                    guard let entry = fieldEntry(
+                        object: fieldObjects[bg.index],
+                        worldX: worldX,
+                        worldY: worldY
+                    ), let paletteIndex = fieldPaletteIndex(
+                        bg: bg,
+                        entry: entry,
+                        worldX: worldX,
+                        worldY: worldY
+                    ), paletteIndex != 0 else { continue }
+
                     let color = read16(0x0500_0000 + UInt32(paletteIndex * 2))
-                    writeBGR555(color, into: &rgba, at: out, alpha: 255)
+                    writeRGB555(color, into: &rgba, at: out, alpha: 255)
                 }
             }
         }
-
         return makeRGBAImage(rgba, width: 240, height: portraitHeight)
     }
+
+    private func resolveFieldObjects() -> Int {
+        var valid = 0
+        for layer in 0..<4 {
+            if fieldObjectValid(fieldObjects[layer], layer: layer) { valid += 1 }
+        }
+        if valid >= 3 { return valid }
+
+        fieldObjects = [UInt32](repeating: 0, count: 4)
+        var address: UInt32 = 0x0200_0000
+        while address + 0x2030 < 0x0204_0000 {
+            let resource = read32(address + 0x10)
+            if isROMPointer(resource), read32(resource) == alfpFieldResourceVtable {
+                let width = Int(read32(resource + 4))
+                let height = Int(read32(resource + 8))
+                let layer = Int((read32(resource + 0x10) >> 16) & 0xFF)
+                let columns = Int(read8(resource + 0x14))
+                let rows = Int(read8(resource + 0x15))
+                if layer >= 0, layer < 4,
+                   width > 0, height > 0,
+                   width % 256 == 0, height % 256 == 0,
+                   columns > 0, rows > 0,
+                   columns * rows <= 0xFF {
+                    fieldObjects[layer] = address
+                }
+            }
+            address += 4
+        }
+        return fieldObjects.enumerated().filter { fieldObjectValid($0.element, layer: $0.offset) }.count
+    }
+
+    private func fieldObjectValid(_ object: UInt32, layer: Int) -> Bool {
+        guard object >= 0x0200_0000, object + 0x2030 < 0x0204_0000 else { return false }
+        let resource = read32(object + 0x10)
+        guard isROMPointer(resource), read32(resource) == alfpFieldResourceVtable else { return false }
+        let resourceLayer = Int((read32(resource + 0x10) >> 16) & 0xFF)
+        let columns = Int(read8(resource + 0x14))
+        let rows = Int(read8(resource + 0x15))
+        return resourceLayer == layer && columns > 0 && rows > 0 && columns * rows <= 0xFF
+    }
+
+    private func fieldEntry(object: UInt32, worldX: Int, worldY: Int) -> UInt16? {
+        guard worldX >= 0, worldY >= 0, object != 0 else { return nil }
+        let resource = read32(object + 0x10)
+        guard isROMPointer(resource) else { return nil }
+        let columns = Int(read8(resource + 0x14))
+        let rows = Int(read8(resource + 0x15))
+        guard columns > 0, rows > 0,
+              worldX < columns * 256,
+              worldY < rows * 256 else { return nil }
+
+        let tileX = worldX >> 3
+        let tileY = worldY >> 3
+        let chunkX = tileX >> 5
+        let chunkY = tileY >> 5
+        let chunkIndex = chunkY * columns + chunkX
+        guard chunkIndex >= 0, chunkIndex <= 0xFE else { return nil }
+
+        let localX = tileX & 31
+        let localY = tileY & 31
+        let byteOffset = (localY * 32 + localX) * 2
+
+        for slot in 0..<4 where Int(read8(object + 0x24 + UInt32(slot))) == chunkIndex {
+            let base = object + 0x30 + UInt32(slot * fieldChunkBytes + byteOffset)
+            return read16(base)
+        }
+
+        let descriptor = read32(resource + 0x18 + UInt32(chunkIndex * 4))
+        guard let chunk = decodedFieldChunk(descriptor), byteOffset + 1 < chunk.count else { return nil }
+        return UInt16(chunk[byteOffset]) | (UInt16(chunk[byteOffset + 1]) << 8)
+    }
+
+    private func decodedFieldChunk(_ descriptor: UInt32) -> Data? {
+        if let cached = decodedFieldChunks[descriptor] { return cached }
+        guard let romImage,
+              isROMPointer(descriptor),
+              let offset = romImage.fileOffset(fromROMPointer: descriptor),
+              let decoded = try? WebfootDecoder.decodeResource(in: romImage, at: offset).data,
+              decoded.count == fieldChunkBytes else { return nil }
+        decodedFieldChunks[descriptor] = decoded
+        return decoded
+    }
+
+    private func resolvedScroll(bg: Int, object: UInt32, resource: UInt32) -> (x: Int, y: Int) {
+        let rawX = Int(read16(0x0400_0010 + UInt32(bg * 4)))
+        let rawY = Int(read16(0x0400_0012 + UInt32(bg * 4)))
+        guard object != 0, isROMPointer(resource) else { return (rawX, rawY) }
+        let columns = Int(read8(resource + 0x14))
+        let rows = Int(read8(resource + 0x15))
+        return (
+            reconstructScroll(raw: rawX, dimension: columns * 256, object: object, columns: columns, axisX: true),
+            reconstructScroll(raw: rawY, dimension: rows * 256, object: object, columns: columns, axisX: false)
+        )
+    }
+
+    /// Some emulators preserve Webfoot's upper scroll bits and some expose only
+    /// the GBA 9-bit ring. If upper bits are missing, infer the 512px page from
+    /// the live four-chunk owner table. This does not guess a map: candidates are
+    /// accepted solely by overlap with chunks the game itself has cached.
+    private func reconstructScroll(raw: Int, dimension: Int, object: UInt32, columns: Int, axisX: Bool) -> Int {
+        guard dimension > 512, raw < 512, columns > 0 else { return raw }
+        var owners: [Int] = []
+        for slot in 0..<4 {
+            let owner = Int(read8(object + 0x24 + UInt32(slot)))
+            if owner != 0xFF { owners.append(owner) }
+        }
+        guard !owners.isEmpty else { return raw }
+
+        var best = raw
+        var bestScore = -1
+        var candidate = raw
+        while candidate < dimension {
+            let startChunk = candidate / 256
+            let endCoord = min(dimension - 1, candidate + (axisX ? 239 : 159))
+            let endChunk = endCoord / 256
+            var score = 0
+            for owner in owners {
+                let ownerAxis = axisX ? (owner % columns) : (owner / columns)
+                if ownerAxis >= startChunk && ownerAxis <= endChunk { score += 1 }
+            }
+            if score > bestScore {
+                bestScore = score
+                best = candidate
+            }
+            candidate += 512
+        }
+        return best
+    }
+
+    private func fieldPaletteIndex(bg: RegularBG, entry: UInt16, worldX: Int, worldY: Int) -> Int? {
+        let tileNumber = Int(entry & 0x03FF)
+        let hFlip = (entry & 0x0400) != 0
+        let vFlip = (entry & 0x0800) != 0
+        let px0 = worldX & 7
+        let py0 = worldY & 7
+        let px = hFlip ? 7 - px0 : px0
+        let py = vFlip ? 7 - py0 : py0
+
+        if bg.is8bpp {
+            let address = bg.charBase + UInt32(tileNumber * 64 + py * 8 + px)
+            return Int(read8(address))
+        }
+
+        let address = bg.charBase + UInt32(tileNumber * 32 + py * 4 + px / 2)
+        let packed = read8(address)
+        let nibble = px & 1 == 0 ? packed & 0x0F : packed >> 4
+        guard nibble != 0 else { return 0 }
+        let bank = Int((entry >> 12) & 0xF)
+        return bank * 16 + Int(nibble)
+    }
+
+    // MARK: - OAM sprites / hardware frame
 
     func spriteFrames() -> [SpriteFrame] {
         let dispcnt = read16(0x0400_0000)
@@ -352,7 +405,7 @@ final class NativeBridgeRuntime {
 
             let width = dimensions.0
             let height = dimensions.1
-            if x + width <= -40 || x >= 280 || y + height <= -190 || y >= 350 { continue }
+            if x + width <= -40 || x >= 280 || y + height <= -40 || y >= 200 { continue }
 
             let is8bpp = (attr0 & 0x2000) != 0
             let hFlip = (attr1 & 0x1000) != 0
@@ -394,119 +447,7 @@ final class NativeBridgeRuntime {
         )
     }
 
-    private func framebufferRGBA() -> [UInt8]? {
-        guard let base = videoBuffer.baseAddress else { return nil }
-        let raw = UnsafeRawPointer(base).assumingMemoryBound(to: UInt8.self)
-        var rgba = [UInt8](repeating: 0, count: 240 * 160 * 4)
-        for pixel in 0..<(240 * 160) {
-            let source = pixel * 4
-            let dest = source
-            rgba[dest] = raw[source + 2]
-            rgba[dest + 1] = raw[source + 1]
-            rgba[dest + 2] = raw[source]
-            rgba[dest + 3] = 255
-        }
-        return rgba
-    }
-
-    private func framebufferNonDarkRatio() -> Double {
-        guard let rgba = framebufferRGBA() else { return 0 }
-        var visible = 0
-        let samples = 240 * 160 / 4
-        for pixel in stride(from: 0, to: 240 * 160, by: 4) {
-            let offset = pixel * 4
-            if Int(rgba[offset]) + Int(rgba[offset + 1]) + Int(rgba[offset + 2]) > 54 {
-                visible += 1
-            }
-        }
-        return Double(visible) / Double(max(samples, 1))
-    }
-
-    private func visibleContentBounds(_ rgba: [UInt8], width: Int, height: Int) -> (x: Int, y: Int, w: Int, h: Int)? {
-        var minX = width
-        var minY = height
-        var maxX = -1
-        var maxY = -1
-        for y in 0..<height {
-            for x in 0..<width {
-                let offset = (y * width + x) * 4
-                let sum = Int(rgba[offset]) + Int(rgba[offset + 1]) + Int(rgba[offset + 2])
-                if sum > 66 {
-                    minX = min(minX, x)
-                    maxX = max(maxX, x)
-                    minY = min(minY, y)
-                    maxY = max(maxY, y)
-                }
-            }
-        }
-        guard maxX >= minX, maxY >= minY else { return nil }
-        return (minX, minY, maxX - minX + 1, maxY - minY + 1)
-    }
-
-    private func blitNearest(
-        _ source: [UInt8],
-        sourceWidth: Int,
-        sourceHeight: Int,
-        sourceRect: (x: Int, y: Int, w: Int, h: Int),
-        into destination: inout [UInt8],
-        destinationWidth: Int,
-        destinationHeight: Int,
-        destinationRect: (x: Int, y: Int, w: Int, h: Int)
-    ) {
-        guard sourceRect.w > 0, sourceRect.h > 0, destinationRect.w > 0, destinationRect.h > 0 else { return }
-        for dy in 0..<destinationRect.h {
-            let outY = destinationRect.y + dy
-            guard outY >= 0, outY < destinationHeight else { continue }
-            let sy = sourceRect.y + min(sourceRect.h - 1, dy * sourceRect.h / destinationRect.h)
-            for dx in 0..<destinationRect.w {
-                let outX = destinationRect.x + dx
-                guard outX >= 0, outX < destinationWidth else { continue }
-                let sx = sourceRect.x + min(sourceRect.w - 1, dx * sourceRect.w / destinationRect.w)
-                let src = (sy * sourceWidth + sx) * 4
-                let dst = (outY * destinationWidth + outX) * 4
-                destination[dst] = source[src]
-                destination[dst + 1] = source[src + 1]
-                destination[dst + 2] = source[src + 2]
-                destination[dst + 3] = 255
-            }
-        }
-    }
-
-    private func regularBGPaletteIndex(_ bg: RegularBG, mapX: Int, mapY: Int) -> Int? {
-        let tileX = mapX >> 3
-        let tileY = mapY >> 3
-        let blockX = tileX >> 5
-        let blockY = tileY >> 5
-        let blockIndex: Int
-        switch bg.sizeCode {
-        case 0: blockIndex = 0
-        case 1: blockIndex = blockX
-        case 2: blockIndex = blockY
-        default: blockIndex = blockY * 2 + blockX
-        }
-
-        let entryX = tileX & 31
-        let entryY = tileY & 31
-        let entryAddress = bg.screenBase + UInt32(blockIndex * 0x800 + (entryY * 32 + entryX) * 2)
-        let entry = read16(entryAddress)
-        let tileNumber = Int(entry & 0x03FF)
-        let hFlip = (entry & 0x0400) != 0
-        let vFlip = (entry & 0x0800) != 0
-        let localX = hFlip ? 7 - (mapX & 7) : (mapX & 7)
-        let localY = vFlip ? 7 - (mapY & 7) : (mapY & 7)
-
-        if bg.is8bpp {
-            let address = bg.charBase + UInt32(tileNumber * 64 + localY * 8 + localX)
-            return Int(read8(address))
-        } else {
-            let address = bg.charBase + UInt32(tileNumber * 32 + localY * 4 + localX / 2)
-            let packed = read8(address)
-            let nibble = localX & 1 == 0 ? packed & 0x0F : packed >> 4
-            if nibble == 0 { return 0 }
-            let bank = Int((entry >> 12) & 0xF)
-            return bank * 16 + Int(nibble)
-        }
-    }
+    // MARK: - Input / audio / memory
 
     private func apply(input: InputState) {
         var next: UInt32 = 0
@@ -547,6 +488,10 @@ final class NativeBridgeRuntime {
         UInt32(read16(address)) | (UInt32(read16(address + 2)) << 16)
     }
 
+    private func isROMPointer(_ value: UInt32) -> Bool {
+        value >= 0x0800_0000 && value < 0x0880_0000
+    }
+
     private func makeSpriteImage(
         objectBase: UInt32,
         tileIndex: Int,
@@ -582,9 +527,12 @@ final class NativeBridgeRuntime {
                     paletteIndex = paletteBank * 16 + Int(nibble)
                 }
                 let out = (outY * width + outX) * 4
-                if paletteIndex == 0 { rgba[out + 3] = 0; continue }
+                if paletteIndex == 0 {
+                    rgba[out + 3] = 0
+                    continue
+                }
                 let color = read16(0x0500_0200 + UInt32(paletteIndex * 2))
-                writeBGR555(color, into: &rgba, at: out, alpha: 255)
+                writeRGB555(color, into: &rgba, at: out, alpha: 255)
             }
         }
         return makeRGBAImage(rgba, width: width, height: height, alphaInfo: .premultipliedLast)
@@ -612,7 +560,7 @@ final class NativeBridgeRuntime {
         )
     }
 
-    private func writeBGR555(_ value: UInt16, into rgba: inout [UInt8], at offset: Int, alpha: UInt8) {
+    private func writeRGB555(_ value: UInt16, into rgba: inout [UInt8], at offset: Int, alpha: UInt8) {
         let r = Int(value & 0x1F)
         let g = Int((value >> 5) & 0x1F)
         let b = Int((value >> 10) & 0x1F)
