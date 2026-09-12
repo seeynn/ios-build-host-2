@@ -1,5 +1,6 @@
 import SpriteKit
 import SwiftUI
+import UIKit
 
 struct GameContainerView: View {
     @State private var scene: PortGameScene
@@ -14,19 +15,39 @@ struct GameContainerView: View {
     }
 
     var body: some View {
-        ZStack {
-            SpriteView(scene: scene, options: [.ignoresSiblingOrder])
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea(.all)
-                .background(.black)
+        GeometryReader { proxy in
+            ZStack {
+                NativeSKView(scene: scene)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
 
-            TouchControls(scene: scene)
-                .ignoresSafeArea(.all)
+                TouchControls(scene: scene)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea(.all)
-        .background(.black)
-        .statusBarHidden(true)
-        .persistentSystemOverlays(.hidden)
+        .background(Color.black.ignoresSafeArea(.all))
+    }
+}
+
+private struct NativeSKView: UIViewRepresentable {
+    let scene: PortGameScene
+
+    func makeUIView(context: Context) -> SKView {
+        let view = SKView(frame: .zero)
+        view.backgroundColor = .black
+        view.isOpaque = true
+        view.isMultipleTouchEnabled = true
+        view.ignoresSiblingOrder = true
+        view.contentMode = .scaleAspectFill
+        scene.scaleMode = .aspectFill
+        view.presentScene(scene)
+        return view
+    }
+
+    func updateUIView(_ uiView: SKView, context: Context) {
+        if uiView.scene !== scene {
+            uiView.presentScene(scene)
+        }
     }
 }
