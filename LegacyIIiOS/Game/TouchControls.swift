@@ -3,38 +3,36 @@ import UIKit
 
 struct TouchControls: View {
     let scene: PortGameScene
-    @State private var dPadActive = false
 
     var body: some View {
         GeometryReader { geo in
-            ZStack {
-                // L/R remain easy to hit but visually recess into the screen edges.
-                HStack {
-                    shoulder(label: "L") { scene.input.l = $0 }
-                    Spacer()
-                    shoulder(label: "R") { scene.input.r = $0 }
-                }
-                .padding(.horizontal, 10)
-                .offset(y: geo.size.height * 0.34)
+            let width = geo.size.width
+            let height = geo.size.height
+            let bottom = max(20, geo.safeAreaInsets.bottom)
 
-                VStack(spacing: 0) {
-                    Spacer()
+            ZStack(alignment: .topLeading) {
+                dPad
+                    .position(x: 76, y: height - bottom - 126)
 
-                    HStack(alignment: .bottom) {
-                        dPad
-                        Spacer(minLength: 28)
-                        actionCluster
-                    }
-                    .padding(.horizontal, 18)
+                actionButton("A", subtitle: "ATTACK", diameter: 68) { scene.input.a = $0 }
+                    .position(x: width - 128, y: height - bottom - 158)
 
-                    HStack(spacing: 12) {
-                        holdCapsule("SELECT") { scene.input.select = $0 }
-                        holdCapsule("START") { scene.input.start = $0 }
-                    }
-                    .padding(.top, 14)
-                    .padding(.bottom, max(18, geo.safeAreaInsets.bottom + 8))
-                }
+                actionButton("B", subtitle: "KI", diameter: 64) { scene.input.b = $0 }
+                    .position(x: width - 62, y: height - bottom - 210)
+
+                actionButton("L", subtitle: nil, diameter: 56) { scene.input.l = $0 }
+                    .position(x: width - 140, y: height - bottom - 86)
+
+                actionButton("R", subtitle: nil, diameter: 56) { scene.input.r = $0 }
+                    .position(x: width - 64, y: height - bottom - 104)
+
+                capsule("SELECT") { scene.input.select = $0 }
+                    .position(x: width * 0.5 - 42, y: height - bottom - 27)
+
+                capsule("START") { scene.input.start = $0 }
+                    .position(x: width * 0.5 + 42, y: height - bottom - 27)
             }
+            .frame(width: width, height: height)
         }
         .ignoresSafeArea(.all)
     }
@@ -43,176 +41,212 @@ struct TouchControls: View {
         ZStack {
             Circle()
                 .fill(.black.opacity(0.24))
-                .overlay(Circle().stroke(.white.opacity(0.17), lineWidth: 0.8))
+                .overlay(Circle().stroke(.white.opacity(0.22), lineWidth: 1))
 
-            Rectangle()
-                .fill(.black.opacity(0.22))
-                .frame(width: 30, height: 92)
-                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.black.opacity(0.24))
+                .frame(width: 32, height: 98)
 
-            Rectangle()
-                .fill(.black.opacity(0.22))
-                .frame(width: 92, height: 30)
-                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.black.opacity(0.24))
+                .frame(width: 98, height: 32)
 
             VStack {
                 Image(systemName: "triangle.fill")
                 Spacer()
-                Image(systemName: "triangle.fill")
-                    .rotationEffect(.degrees(180))
+                Image(systemName: "triangle.fill").rotationEffect(.degrees(180))
             }
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(.white.opacity(0.46))
             .padding(.vertical, 15)
 
             HStack {
-                Image(systemName: "triangle.fill")
-                    .rotationEffect(.degrees(-90))
+                Image(systemName: "triangle.fill").rotationEffect(.degrees(-90))
                 Spacer()
-                Image(systemName: "triangle.fill")
-                    .rotationEffect(.degrees(90))
+                Image(systemName: "triangle.fill").rotationEffect(.degrees(90))
             }
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(.white.opacity(0.46))
             .padding(.horizontal, 15)
         }
-        .frame(width: 112, height: 112)
-        .contentShape(Circle())
-        .gesture(
-            DragGesture(minimumDistance: 0, coordinateSpace: .local)
-                .onChanged { value in
-                    if !dPadActive {
-                        dPadActive = true
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.20)
-                    }
-                    updateDPad(at: value.location, size: 112)
-                }
-                .onEnded { _ in
-                    dPadActive = false
-                    clearDPad()
-                }
-        )
+        .font(.system(size: 10, weight: .bold))
+        .foregroundStyle(.white.opacity(0.48))
+        .frame(width: 118, height: 118)
+        .overlay {
+            DPadCapture { up, down, left, right in
+                scene.input.up = up
+                scene.input.down = down
+                scene.input.left = left
+                scene.input.right = right
+            }
+        }
     }
 
-    private func updateDPad(at location: CGPoint, size: CGFloat) {
-        let center = size * 0.5
-        let dx = location.x - center
-        let dy = location.y - center
-        let radius = sqrt(dx * dx + dy * dy)
-        let deadZone: CGFloat = 11
+    private func actionButton(
+        _ label: String,
+        subtitle: String?,
+        diameter: CGFloat,
+        changed: @escaping (Bool) -> Void
+    ) -> some View {
+        ZStack {
+            Circle()
+                .fill(.black.opacity(0.28))
+                .overlay(Circle().stroke(.white.opacity(0.22), lineWidth: 1))
 
-        guard radius > deadZone else {
-            clearDPad()
-            return
+            VStack(spacing: 1) {
+                Text(label)
+                    .font(.system(size: label.count == 1 ? 21 : 16, weight: .black, design: .rounded))
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 7, weight: .bold, design: .rounded))
+                        .tracking(0.6)
+                }
+            }
+            .foregroundStyle(.white.opacity(0.58))
         }
+        .frame(width: diameter, height: diameter)
+        // The hit target is deliberately larger than the artwork. UIKit receives
+        // touch-down immediately, so taps no longer need a long/firm press.
+        .padding(9)
+        .overlay { InstantHoldCapture(changed: changed) }
+    }
 
-        // Use a slightly wider diagonal gate than the old independent-axis test.
-        // This prevents accidental diagonal movement when a thumb is only a few
-        // pixels off the intended cardinal direction.
+    private func capsule(_ label: String, changed: @escaping (Bool) -> Void) -> some View {
+        ZStack {
+            Capsule()
+                .fill(.black.opacity(0.24))
+                .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
+            Text(label)
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .tracking(0.8)
+                .foregroundStyle(.white.opacity(0.42))
+        }
+        .frame(width: 66, height: 28)
+        .padding(7)
+        .overlay { InstantHoldCapture(changed: changed) }
+    }
+}
+
+private struct InstantHoldCapture: UIViewRepresentable {
+    let changed: (Bool) -> Void
+
+    func makeUIView(context: Context) -> HoldCaptureView {
+        let view = HoldCaptureView()
+        view.backgroundColor = .clear
+        view.isMultipleTouchEnabled = false
+        view.changed = changed
+        return view
+    }
+
+    func updateUIView(_ uiView: HoldCaptureView, context: Context) {
+        uiView.changed = changed
+    }
+
+    static func dismantleUIView(_ uiView: HoldCaptureView, coordinator: ()) {
+        uiView.cancelImmediately()
+    }
+}
+
+private final class HoldCaptureView: UIView {
+    var changed: (Bool) -> Void = { _ in }
+    private var pressed = false
+    private var generation = 0
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        generation &+= 1
+        guard !pressed else { return }
+        pressed = true
+        changed(true)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.16)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Deliberately keep the button held while the thumb drifts. Mobile action
+        // buttons should not drop input because the finger moved a few pixels.
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { finishPress() }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { finishPress() }
+
+    private func finishPress() {
+        guard pressed else { return }
+        pressed = false
+        let token = generation
+        // Guarantee several 60 Hz game frames even for a very fast tap.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.055) { [weak self] in
+            guard let self, self.generation == token, !self.pressed else { return }
+            self.changed(false)
+        }
+    }
+
+    func cancelImmediately() {
+        generation &+= 1
+        if pressed { pressed = false }
+        changed(false)
+    }
+}
+
+private struct DPadCapture: UIViewRepresentable {
+    let changed: (_ up: Bool, _ down: Bool, _ left: Bool, _ right: Bool) -> Void
+
+    func makeUIView(context: Context) -> DPadCaptureView {
+        let view = DPadCaptureView()
+        view.backgroundColor = .clear
+        view.changed = changed
+        return view
+    }
+
+    func updateUIView(_ uiView: DPadCaptureView, context: Context) {
+        uiView.changed = changed
+    }
+
+    static func dismantleUIView(_ uiView: DPadCaptureView, coordinator: ()) {
+        uiView.release()
+    }
+}
+
+private final class DPadCaptureView: UIView {
+    var changed: (Bool, Bool, Bool, Bool) -> Void = { _, _, _, _ in }
+    private var activeTouch: UITouch?
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard activeTouch == nil, let touch = touches.first else { return }
+        activeTouch = touch
+        update(touch.location(in: self))
+        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.12)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let activeTouch, touches.contains(activeTouch) else { return }
+        update(activeTouch.location(in: self))
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let activeTouch, touches.contains(activeTouch) else { return }
+        self.activeTouch = nil
+        release()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        self.activeTouch = nil
+        release()
+    }
+
+    private func update(_ point: CGPoint) {
+        let dx = point.x - bounds.midX
+        let dy = point.y - bounds.midY
+        let radius = hypot(dx, dy)
+        let deadZone = min(bounds.width, bounds.height) * 0.13
+        guard radius > deadZone else { release(); return }
+
         let angle = atan2(dy, dx)
         let horizontal = abs(cos(angle))
         let vertical = abs(sin(angle))
-        let diagonalThreshold: CGFloat = 0.46
-
-        scene.input.left = dx < 0 && horizontal > diagonalThreshold
-        scene.input.right = dx > 0 && horizontal > diagonalThreshold
-        scene.input.up = dy < 0 && vertical > diagonalThreshold
-        scene.input.down = dy > 0 && vertical > diagonalThreshold
+        let gate: CGFloat = 0.43
+        let left = dx < 0 && horizontal > gate
+        let right = dx > 0 && horizontal > gate
+        let up = dy < 0 && vertical > gate
+        let down = dy > 0 && vertical > gate
+        changed(up, down, left, right)
     }
 
-    private func clearDPad() {
-        scene.input.left = false
-        scene.input.right = false
-        scene.input.up = false
-        scene.input.down = false
+    func release() {
+        changed(false, false, false, false)
     }
-
-    private var actionCluster: some View {
-        HStack(spacing: 10) {
-            holdCircle("B", subtitle: "KI") { scene.input.b = $0 }
-                .offset(y: 10)
-            holdCircle("A", subtitle: "ATTACK") { scene.input.a = $0 }
-                .offset(y: -8)
-        }
-    }
-
-    private func shoulder(label: String, changed: @escaping (Bool) -> Void) -> some View {
-        HoldSurface(shape: AnyShape(Capsule()), changed: changed) { pressed in
-            Text(label)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .foregroundStyle(.white.opacity(pressed ? 0.76 : 0.30))
-                .frame(width: 70, height: 30)
-                .background(.black.opacity(pressed ? 0.34 : 0.16), in: Capsule())
-                .overlay(Capsule().stroke(.white.opacity(pressed ? 0.30 : 0.10), lineWidth: 0.8))
-        }
-    }
-
-    private func holdCircle(_ label: String, subtitle: String, changed: @escaping (Bool) -> Void) -> some View {
-        HoldSurface(shape: AnyShape(Circle()), changed: changed) { pressed in
-            VStack(spacing: 1) {
-                Text(label)
-                    .font(.system(size: 19, weight: .black, design: .rounded))
-                Text(subtitle)
-                    .font(.system(size: 6.5, weight: .bold, design: .rounded))
-                    .tracking(0.5)
-            }
-            .foregroundStyle(.white.opacity(pressed ? 0.84 : 0.46))
-            .frame(width: 60, height: 60)
-            .background(.black.opacity(pressed ? 0.40 : 0.23), in: Circle())
-            .overlay(Circle().stroke(.white.opacity(pressed ? 0.34 : 0.14), lineWidth: 0.8))
-        }
-    }
-
-    private func holdCapsule(_ label: String, changed: @escaping (Bool) -> Void) -> some View {
-        HoldSurface(shape: AnyShape(Capsule()), changed: changed) { pressed in
-            Text(label)
-                .font(.system(size: 7.5, weight: .bold, design: .rounded))
-                .tracking(0.7)
-                .foregroundStyle(.white.opacity(pressed ? 0.70 : 0.30))
-                .frame(width: 58, height: 24)
-                .background(.black.opacity(pressed ? 0.35 : 0.16), in: Capsule())
-                .overlay(Capsule().stroke(.white.opacity(pressed ? 0.28 : 0.10), lineWidth: 0.8))
-        }
-    }
-}
-
-private struct HoldSurface<Content: View>: View {
-    let shape: AnyShape
-    let changed: (Bool) -> Void
-    @ViewBuilder var content: (Bool) -> Content
-    @State private var pressed = false
-
-    var body: some View {
-        content(pressed)
-            .contentShape(shape)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        guard !pressed else { return }
-                        pressed = true
-                        changed(true)
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.22)
-                    }
-                    .onEnded { _ in
-                        pressed = false
-                        changed(false)
-                    }
-            )
-            .onDisappear {
-                if pressed {
-                    pressed = false
-                    changed(false)
-                }
-            }
-    }
-}
-
-private struct AnyShape: Shape {
-    private let pathBuilder: (CGRect) -> Path
-
-    init<S: Shape>(_ shape: S) {
-        pathBuilder = { rect in shape.path(in: rect) }
-    }
-
-    func path(in rect: CGRect) -> Path { pathBuilder(rect) }
 }
