@@ -14,18 +14,16 @@ struct TouchControls: View {
                 dPad
                     .position(x: 78, y: height - bottom - 130)
 
-                // Agreed phone layout: four semantic action buttons rather than
-                // exposing GBA shoulder labels to the player.
-                actionButton(icon: "hand.raised.fill", title: "ATTACK", diameter: 60) { scene.input.a = $0 }
+                actionButton(key: "A", title: "ATTACK", diameter: 62) { scene.input.a = $0 }
                     .position(x: width - 118, y: height - bottom - 182)
 
-                actionButton(icon: "sparkles", title: "KI BLAST", diameter: 60) { scene.input.b = $0 }
+                actionButton(key: "B", title: "KI", diameter: 62) { scene.input.b = $0 }
                     .position(x: width - 54, y: height - bottom - 226)
 
-                actionButton(icon: "shield.fill", title: "BLOCK", diameter: 56) { scene.input.r = $0 }
+                actionButton(key: "R", title: "BLOCK", diameter: 58) { scene.input.r = $0 }
                     .position(x: width - 124, y: height - bottom - 106)
 
-                actionButton(icon: "bolt.fill", title: "TRANSFORM", diameter: 56) { scene.input.l = $0 }
+                actionButton(key: "L", title: "TRANSFORM", diameter: 58) { scene.input.l = $0 }
                     .position(x: width - 56, y: height - bottom - 132)
 
                 capsule("SELECT") { scene.input.select = $0 }
@@ -42,15 +40,15 @@ struct TouchControls: View {
     private var dPad: some View {
         ZStack {
             Circle()
-                .fill(.black.opacity(0.25))
-                .overlay(Circle().stroke(.white.opacity(0.22), lineWidth: 1))
+                .fill(.black.opacity(0.26))
+                .overlay(Circle().stroke(.white.opacity(0.26), lineWidth: 1))
 
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(.black.opacity(0.25))
+                .fill(.black.opacity(0.28))
                 .frame(width: 34, height: 104)
 
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(.black.opacity(0.25))
+                .fill(.black.opacity(0.28))
                 .frame(width: 104, height: 34)
 
             VStack {
@@ -68,7 +66,7 @@ struct TouchControls: View {
             .padding(.horizontal, 16)
         }
         .font(.system(size: 10, weight: .black))
-        .foregroundStyle(.white.opacity(0.52))
+        .foregroundStyle(.white.opacity(0.62))
         .frame(width: 124, height: 124)
         .padding(10)
         .overlay {
@@ -82,28 +80,28 @@ struct TouchControls: View {
     }
 
     private func actionButton(
-        icon: String,
+        key: String,
         title: String,
         diameter: CGFloat,
         changed: @escaping (Bool) -> Void
     ) -> some View {
         ZStack {
             Circle()
-                .fill(.black.opacity(0.30))
-                .overlay(Circle().stroke(.white.opacity(0.21), lineWidth: 1))
+                .fill(.black.opacity(0.34))
+                .overlay(Circle().stroke(.white.opacity(0.28), lineWidth: 1))
 
-            VStack(spacing: 2) {
-                Image(systemName: icon)
-                    .font(.system(size: 18, weight: .bold))
+            VStack(spacing: 0) {
+                Text(key)
+                    .font(.system(size: 20, weight: .black, design: .rounded))
                 Text(title)
-                    .font(.system(size: 6.4, weight: .black, design: .rounded))
-                    .tracking(0.35)
+                    .font(.system(size: title == "TRANSFORM" ? 5.5 : 6.4, weight: .black, design: .rounded))
+                    .tracking(0.45)
             }
-            .foregroundStyle(.white.opacity(0.64))
+            .foregroundStyle(.white.opacity(0.78))
         }
         .frame(width: diameter, height: diameter)
-        // The capture surface is substantially larger than the art. Touches fire
-        // on touch-down immediately; no long or forceful press is required.
+        // Keep the generous invisible hit target from the last build. The user
+        // liked the responsiveness; only the visual identification changes here.
         .padding(12)
         .overlay { InstantHoldCapture(changed: changed) }
     }
@@ -111,12 +109,12 @@ struct TouchControls: View {
     private func capsule(_ label: String, changed: @escaping (Bool) -> Void) -> some View {
         ZStack {
             Capsule()
-                .fill(.black.opacity(0.23))
-                .overlay(Capsule().stroke(.white.opacity(0.17), lineWidth: 1))
+                .fill(.black.opacity(0.28))
+                .overlay(Capsule().stroke(.white.opacity(0.22), lineWidth: 1))
             Text(label)
                 .font(.system(size: 8, weight: .bold, design: .rounded))
                 .tracking(0.8)
-                .foregroundStyle(.white.opacity(0.42))
+                .foregroundStyle(.white.opacity(0.55))
         }
         .frame(width: 66, height: 27)
         .padding(9)
@@ -158,7 +156,7 @@ private final class HoldCaptureView: UIView {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        // Keep the button held while a thumb naturally drifts inside its large cell.
+        // Intentionally remain held during normal thumb drift.
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { finishPress() }
