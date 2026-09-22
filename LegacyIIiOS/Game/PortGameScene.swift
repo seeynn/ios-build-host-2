@@ -1,7 +1,13 @@
+import Combine
 import Foundation
 import SpriteKit
 
-final class PortGameScene: SKScene {
+final class PortGameScene: SKScene, ObservableObject {
+    enum ControlMode {
+        case gameplay
+        case menu
+        case cinematic
+    }
     private let romURL: URL
     private let saveURL: URL
     private let backgroundNode = SKSpriteNode()
@@ -13,6 +19,7 @@ final class PortGameScene: SKScene {
     private let verticalExtension = 180
 
     var input = InputState()
+    @Published private(set) var controlMode: ControlMode = .menu
 
     init(size: CGSize, romURL: URL, saveURL: URL) {
         self.romURL = romURL
@@ -50,6 +57,8 @@ final class PortGameScene: SKScene {
     override func update(_ currentTime: TimeInterval) {
         guard let runtime else { return }
         runtime.runFrame(input: input)
+        let nextMode: ControlMode = runtime.isFieldGameplay() ? .gameplay : .menu
+        if nextMode != controlMode { controlMode = nextMode }
         frameCounter &+= 1
         if frameCounter == 1 || frameCounter % 2 == 0 { refreshPresentation(runtime) }
     }
